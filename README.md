@@ -85,7 +85,7 @@ dsh-turn-notify/
 Copy-Item "P:\dshTest\dsh-turn-notify\plugin\*" "C:\Users\20668\.dsh\profiles\web\turn-notify\" -Recurse -Force
 ```
 
-（或直接 `git clone https://github.com/13732070103/dsh-turn-notify` 后拷贝。）
+（或直接 `git clone https://github.com/Ruiming-cn/dsh-turn-notify` 后拷贝。）
 
 ### 2. 配置补丁
 
@@ -167,6 +167,7 @@ $sysruntime = "C:\Windows\Microsoft.NET\assembly\GAC_MSIL\System.Runtime\v4.0_4.
 
 ## 迁移与发布
 
-- **已发布**：https://github.com/13732070103/dsh-turn-notify （MIT License）
+- **已发布**：https://github.com/Ruiming-cn/dsh-turn-notify （MIT License）
 - **已迁移全局**：插件运行于 `~/.dsh/profiles/web/turn-notify/`，patch 使用相对路径 `./turn-notify/index.mjs`
 - **更新插件**：拉取仓库最新代码后，重新拷贝 `plugin/` 至全局目录并重启 GUI；如 `dsh-notify.cs` 有改动需重编译 exe（见「构建 dsh-notify.exe」章节）
+
