@@ -1176,6 +1176,92 @@ git commit -m "feat: show question/answer preview in notifications, sound on by 
 Run: `& "P:\dshTest\dsh-turn-notify\plugin\dsh-notify.exe" -Title "DSH · 轮次完成" -Body "会话 abcdef · 问：请帮我写一份财务分析报告…`n答：好的，以下是财务分析报告正文…`n请查看结果或下达新指令" -Sound`
 Expected: exit 0；toast 显示多行正文（问/答预览）且带提示音（用户确认）。
 
+
+---
+
+### Task 8: toast 字体放大 + 应用名中文显示（2026-08-16 用户反馈）
+
+**需求**：① 通知正文字体放大（ToastGeneric 默认 body 字号偏小，正文 `<text>` 加 `hint-style='subtitle'`）；② toast 顶部归属应用名中文显示（由开始菜单快捷方式文件名决定，`dsh-turn-notify.lnk` → `DSH 通知.lnk`）；③ 标题保持 `DSH · <kind>` 格式（已实现，无需改动）。
+
+**Files:**
+- Modify: `plugin/dsh-notify.cs`（SendToast 的 XML：正文 text 加 `hint-style='subtitle'`）
+- Modify: `plugin/notify.ps1`（同步：正文 text 加 `hint-style='subtitle'`，保持回退路径一致）
+- Create: `plugin/dsh-notify.exe`（重编译产物）
+- 系统侧：开始菜单快捷方式 `%APPDATA%\Microsoft\Windows\Start Menu\Programs\dsh-turn-notify.lnk` 重命名为 `DSH 通知.lnk`（AUMID 属性保留，重命名后 toast 归属名显示「DSH 通知」）
+
+**Interfaces:**
+- Consumes: 现有 `dsh-notify.exe` 参数契约（`-Title -Body [-Sound]`，退出码 0/1/2）
+- Produces: toast XML 中第二个 `<text>` 携带 `hint-style='subtitle'`（放大一档）；快捷方式名「DSH 通知」
+
+- [ ] **Step 1: 修改 dsh-notify.cs 的 SendToast**
+
+将：
+
+```csharp
+        string xml = "<toast duration='long'><visual><binding template='ToastGeneric'>"
+            + "<text>" + Escape(title) + "</text>"
+            + "<text>" + Escape(body) + "</text>"
+            + "</binding></visual>"
+```
+
+改为：
+
+```csharp
+        string xml = "<toast duration='long'><visual><binding template='ToastGeneric'>"
+            + "<text>" + Escape(title) + "</text>"
+            + "<text hint-style='subtitle'>" + Escape(body) + "</text>"
+            + "</binding></visual>"
+```
+
+- [ ] **Step 2: 重编译 dsh-notify.exe**
+
+Run（与 Task 6 Step 2 相同命令，workdir 任意）:
+
+```powershell
+$winmd = "C:\Program Files (x86)\Windows Kits\10\UnionMetadata\10.0.26100.0\Windows.winmd"
+$sysruntime = "C:\Windows\Microsoft.NET\assembly\GAC_MSIL\System.Runtime\v4.0_4.0.0.0__b03f5f7f11d50a3a\System.Runtime.dll"
+& "C:\Windows\Microsoft.NET\Framework64\v4.0.30319\csc.exe" /nologo /nostdlib /target:exe /out:"P:\dshTest\dsh-turn-notify\plugin\dsh-notify.exe" /r:mscorlib.dll /r:System.dll /r:System.Core.dll /r:"$sysruntime" /r:System.Windows.Forms.dll /r:System.Drawing.dll /r:System.Runtime.WindowsRuntime.dll /r:"$winmd" "P:\dshTest\dsh-turn-notify\plugin\dsh-notify.cs"
+```
+
+Expected: csc exit 0。
+
+- [ ] **Step 3: 同步 notify.ps1**
+
+将 `plugin/notify.ps1` 的 Send-Toast 中正文行：
+
+```powershell
+  $xml += "<text>$(& Esc $Body)</text>"
+```
+
+改为：
+
+```powershell
+  $xml += "<text hint-style='subtitle'>$(& Esc $Body)</text>"
+```
+
+- [ ] **Step 4: 重命名快捷方式**
+
+Run（PowerShell）:
+
+```powershell
+$dir = "$env:APPDATA\Microsoft\Windows\Start Menu\Programs"
+Rename-Item "$dir\dsh-turn-notify.lnk" "DSH 通知.lnk"
+```
+
+Expected: `"$dir\DSH 通知.lnk"` 存在（AUMID 属性随文件保留）。
+
+- [ ] **Step 5: 冒烟**
+
+Run: `& "P:\dshTest\dsh-turn-notify\plugin\dsh-notify.exe" -Title "DSH · 字体测试" -Body "会话 abcdef · 问：测试提问`n答：测试回答`n请查看结果" -Sound`
+Expected: exit 0；toast 顶部应用名显示「DSH 通知」、正文字号放大（用户确认观感）。
+
+- [ ] **Step 6: 提交**
+
+```bash
+git add plugin/dsh-notify.cs plugin/dsh-notify.exe plugin/notify.ps1
+git commit -m "feat: enlarge toast body text and localize notifier app name"
+```
+
 ---
 
 ## 后续（不在本计划范围）
@@ -1183,4 +1269,5 @@ Expected: exit 0；toast 显示多行正文（问/答预览）且带提示音（
 - 迁移全局：拷贝 `plugin/` 至 `~/.dsh/profiles/web/turn-notify/`，patch 改 `name: "./turn-notify/index.mjs"`，删除本计划追加的 file:/// 条目（新旧条目并存会双弹通知）
 - GitHub 发布：补充 LICENSE、CHANGELOG、示例截图；README 补充安装/配置说明
 - 可选增强：`agent/error`（turn 外错误）监听、通知点击跳转 GUI（需注册 AUMID）、声音开关按事件类型细分
+
 
