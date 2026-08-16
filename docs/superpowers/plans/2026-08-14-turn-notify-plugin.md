@@ -389,7 +389,7 @@ export function createDecider(config, clock = () => Date.now()) {
       : phase === 'paused' ? 'goal-paused'
         : phase === 'complete' ? 'goal-complete'
           : null
-    return kind ? compose(kind, { change }, session, s) : null
+    return kind ? compose(kind, { change }, session) : null
   }
 
   return {
@@ -435,7 +435,8 @@ export function createDecider(config, clock = () => Date.now()) {
         case 'goal/change':
           return notify.goals ? goalNotice(event.data, session) : null
         case 'approval/asked':
-          return notify.approvals ? compose('approval', event.data, session, s) : null
+          // goal/approval 事件不带问答预览（与 brief 契约一致）
+          return notify.approvals ? compose('approval', event.data, session) : null
         default:
           return null
       }
@@ -1099,8 +1100,8 @@ test('completed body includes truncated question and answer preview', () => {
   d.decide(ev('user/message', { source: { kind: 'user' }, content: [{ type: 'text', text: '请帮我写一份财务分析报告，包含现金流、负债率与营收增长趋势' }] }), s)
   d.decide(ev('assistant/message', { message: { content: [{ type: 'text', text: '好的，以下是财务分析报告正文，包含三大报表核心指标与趋势图说明……' }] } }), s)
   const notice = d.decide(ev('turn/end', { turn: 1, reason: { kind: 'completed' } }), s)
-  // previewChars=20：truncate 取前 19 字符 + '…'（"请帮我写一份财务分析报告，包含现金流，" 与 "好的，以下是财务分析报告正文，包含三大"）
-  assert.match(notice.body, /^会话 abcdef · 问：请帮我写一份财务分析报告，包含现金流，…\n答：好的，以下是财务分析报告正文，包含三大…\n请查看结果或下达新指令$/)
+  // previewChars=20：truncate 取前 19 字符 + '…'（提问第 19 字符是顿号"、"："请帮我写一份财务分析报告，包含现金流、"；回答："好的，以下是财务分析报告正文，包含三大"）
+  assert.match(notice.body, /^会话 abcdef · 问：请帮我写一份财务分析报告，包含现金流、…\n答：好的，以下是财务分析报告正文，包含三大…\n请查看结果或下达新指令$/)
   assert.ok(!notice.body.includes('负债率'))
   assert.ok(!notice.body.includes('趋势图说明'))
 })
