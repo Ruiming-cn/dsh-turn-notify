@@ -315,28 +315,3 @@ test('tool-call blocks are excluded from preview text', () => {
   assert.match(notice.body, /答：结果文本/)
   assert.ok(!notice.body.includes('bash'))
 })
-
-test('completed notice carries launchUrl with configured guiUrl', () => {
-  const d = createDecider({ guiUrl: 'http://example.test:4321' })
-  const s = session()
-  d.decide(ev('turn/start', { turn: 1 }), s)
-  d.decide(ev('user/message', { source: { kind: 'user' }, content: [{ type: 'text', text: 'hi' }] }), s)
-  const notice = d.decide(ev('turn/end', { turn: 1, reason: { kind: 'completed' } }), s)
-  assert.equal(notice.launchUrl, 'http://example.test:4321/?session=session-0123456789abcdef')
-})
-
-test('scheduler passes -Launch for notices with launchUrl', () => {
-  const spawned = []
-  const scheduler = createScheduler({
-    psPath: 'C:/notify.ps1',
-    exePath: 'C:/dsh-notify.exe',
-    onLog: () => {},
-  }, (...args) => {
-    const child = fakeChild()
-    spawned.push({ args, child })
-    return child
-  })
-  scheduler.push({ kind: 'blocked', title: 't', body: 'b', critical: true, launchUrl: 'http://x/?session=s1' })
-  assert.deepEqual(spawned[0].args[1], ['-Title', 't', '-Body', 'b', '-Launch', 'http://x/?session=s1'])
-  spawned[0].child.handlers.close(0)
-})

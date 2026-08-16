@@ -18,7 +18,6 @@ export const DEFAULT_CONFIG = {
   titlePrefix: 'DSH',
   showSessionTag: true,
   previewChars: 60,
-  guiUrl: 'http://127.0.0.1:3080',
 }
 
 export function normalizeConfig(raw = {}) {
@@ -29,7 +28,6 @@ export function normalizeConfig(raw = {}) {
     showSessionTag: raw.showSessionTag !== false,
     rootSessionsOnly: raw.rootSessionsOnly !== false,
     previewChars: Number.isFinite(raw.previewChars) ? raw.previewChars : DEFAULT_CONFIG.previewChars,
-    guiUrl: typeof raw.guiUrl === 'string' ? raw.guiUrl : DEFAULT_CONFIG.guiUrl,
   }
 }
 
@@ -77,7 +75,7 @@ const MESSAGES = {
 }
 
 export function createDecider(config, clock = () => Date.now()) {
-  const { notify, cooldownMs, titlePrefix, showSessionTag, rootSessionsOnly, previewChars, guiUrl } = normalizeConfig(config)
+  const { notify, cooldownMs, titlePrefix, showSessionTag, rootSessionsOnly, previewChars } = normalizeConfig(config)
   const state = new Map() // sessionId -> { hasUserInput, lastUserText, lastAssistantText, lastGoalPhase, lastCompletedAt }
 
   function sessionState(sessionId) {
@@ -112,7 +110,6 @@ export function createDecider(config, clock = () => Date.now()) {
       title: clean(`${titlePrefix} · ${title}`),
       body: clean(`${tag}${preview}${body}`),
       critical: CRITICAL_KINDS.has(kind),
-      launchUrl: guiUrl && session?.id ? `${guiUrl}/?session=${session.id}` : undefined,
     }
   }
 

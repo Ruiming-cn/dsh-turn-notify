@@ -18,41 +18,7 @@ class DshNotify
     [STAThread]
     static int Main(string[] args)
     {
-        // Activation mode: launched by the toast activation chain. Windows may
-        // pass the launch string as separate args, as one quoted arg, or as the
-        // bare URL — accept all three shapes.
-        string activateUrl = null;
-        for (int i = 0; i < args.Length; i++)
-        {
-            if (args[i] == "-Activate" && i + 1 < args.Length) { activateUrl = args[i + 1]; break; }
-            if (args[i].StartsWith("-Activate ", StringComparison.Ordinal))
-            {
-                activateUrl = args[i].Substring("-Activate ".Length).Trim('"', ' ');
-                break;
-            }
-            if (args[i].StartsWith("http://", StringComparison.OrdinalIgnoreCase)
-                || args[i].StartsWith("https://", StringComparison.OrdinalIgnoreCase))
-            {
-                activateUrl = args[i].Trim('"', ' ');
-                break;
-            }
-        }
-        if (activateUrl != null)
-        {
-            try
-            {
-                System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo(activateUrl) { UseShellExecute = true });
-                return 0;
-            }
-            catch (Exception e)
-            {
-                System.IO.File.AppendAllText(
-                    System.IO.Path.Combine(System.IO.Path.GetTempPath(), "dsh-notify-activate.log"),
-                    DateTime.Now.ToString("s") + " activate failed: " + e.Message + " args=[" + string.Join("|", args) + "]" + Environment.NewLine);
-                return 1;
-            }
-        }
-        string title = "", body = "", launch = "";
+        string title = "", body = "";
         bool sound = false;
         for (int i = 0; i < args.Length; i++)
         {
@@ -61,17 +27,16 @@ class DshNotify
                 case "-Title": if (i + 1 < args.Length) title = args[++i]; break;
                 case "-Body": if (i + 1 < args.Length) body = args[++i]; break;
                 case "-Sound": sound = true; break;
-                case "-Launch": if (i + 1 < args.Length) launch = args[++i]; break;
             }
         }
         if (title.Length == 0 || body.Length == 0)
         {
-            Console.Error.WriteLine("usage: dsh-notify.exe -Title <title> -Body <body> [-Sound] [-Launch <url>]");
+            Console.Error.WriteLine("usage: dsh-notify.exe -Title <title> -Body <body> [-Sound]");
             return 2;
         }
         try
         {
-            SendToast(title, body, sound, launch);
+            SendToast(title, body, sound);
             return 0;
         }
         catch (Exception e1)
@@ -96,10 +61,9 @@ class DshNotify
         @"C:\Windows\Media\Windows Notify.wav",
     };
 
-    static void SendToast(string title, string body, bool sound, string launch)
+    static void SendToast(string title, string body, bool sound)
     {
-        string launchAttr = launch.Length > 0 ? " launch='" + Escape("-Activate \"" + launch + "\"") + "'" : "";
-        string xml = "<toast duration='long'" + launchAttr + "><visual><binding template='ToastText02'>"
+        string xml = "<toast duration='long'><visual><binding template='ToastText02'>"
             + "<text id='1' hint-style='title'>" + Escape(title) + "</text>"
             + "<text id='2'>" + Escape(body) + "</text>"
             + "</binding></visual>"
