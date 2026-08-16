@@ -54,26 +54,41 @@ class DshNotify
         }
     }
 
+    static readonly string[] CHIME_CANDIDATES = new string[]
+    {
+        @"C:\Windows\Media\chimes.wav",
+        @"C:\Windows\Media\Windows Ding.wav",
+        @"C:\Windows\Media\Windows Notify.wav",
+    };
+
     static void SendToast(string title, string body, bool sound)
     {
-        string audioSrc = "ms-winsoundevent:Notification.Default";
-        if (sound)
-        {
-            string wavPath = System.IO.Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "notify.wav");
-            audioSrc = System.IO.File.Exists(wavPath)
-                ? new Uri(wavPath).AbsoluteUri
-                : "ms-winsoundevent:Notification.Default";
-        }
         string xml = "<toast duration='long'><visual><binding template='ToastText02'>"
             + "<text id='1' hint-style='title'>" + Escape(title) + "</text>"
-            + "<text id='2' hint-style='title'>" + Escape(body) + "</text>"
+            + "<text id='2'>" + Escape(body) + "</text>"
             + "</binding></visual>"
-            + (sound ? "<audio src='" + audioSrc + "'/>" : "<audio silent='true'/>")
+            + (sound ? "<audio silent='true'/>" : "<audio silent='true'/>")
             + "</toast>";
         XmlDocument doc = new XmlDocument();
         doc.LoadXml(xml);
         ToastNotification toast = new ToastNotification(doc);
         ToastNotificationManager.CreateToastNotifier("dsh-turn-notify").Show(toast);
+        if (sound) PlayChime();
+    }
+
+    static void PlayChime()
+    {
+        foreach (string candidate in CHIME_CANDIDATES)
+        {
+            if (System.IO.File.Exists(candidate))
+            {
+                using (System.Media.SoundPlayer player = new System.Media.SoundPlayer(candidate))
+                {
+                    player.PlaySync();
+                }
+                return;
+            }
+        }
     }
 
     static string Escape(string s)
