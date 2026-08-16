@@ -1,0 +1,8 @@
+- name: './logger.mjs'
+- name: '../../plugin/index.mjs'
+  config:
+    dryRun: true
+    showSessionTag: true
+    sound: false
+    timeoutMs: 10000
+- name: './emit.mjs'
