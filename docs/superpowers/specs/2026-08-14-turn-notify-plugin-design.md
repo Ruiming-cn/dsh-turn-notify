@@ -77,8 +77,8 @@ session/event (global 监听)                goal/change ─┐
 export const name = 'turn-notify'
 export function apply(ctx, config) {
   ctx.on('session/event', (session, event) => {
-    const notice = decide(event, { session, config })
-    if (notice) void notify(notice, config)   // 不阻塞事件分发
+    const notice = decide(event, session, config)   // 过滤/映射/冷却均在 decide 层
+    if (notice) void notify(notice, config)           // 不阻塞事件分发
   }, { global: true })
 }
 ```

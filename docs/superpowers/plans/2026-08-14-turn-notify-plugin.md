@@ -291,6 +291,7 @@ export function normalizeConfig(raw = {}) {
     cooldownMs: Number.isFinite(raw.cooldownMs) ? raw.cooldownMs : DEFAULT_CONFIG.cooldownMs,
     titlePrefix: typeof raw.titlePrefix === 'string' && raw.titlePrefix !== '' ? raw.titlePrefix : DEFAULT_CONFIG.titlePrefix,
     showSessionTag: raw.showSessionTag !== false,
+    rootSessionsOnly: raw.rootSessionsOnly !== false,
   }
 }
 
@@ -328,13 +329,13 @@ const MESSAGES = {
 }
 
 export function createDecider(config, clock = () => Date.now()) {
-  const { notify, cooldownMs, titlePrefix, showSessionTag } = normalizeConfig(config)
+  const { notify, cooldownMs, titlePrefix, showSessionTag, rootSessionsOnly } = normalizeConfig(config)
   const state = new Map() // sessionId -> { hasUserInput, lastGoalPhase, lastCompletedAt }
 
   function sessionState(sessionId) {
     let s = state.get(sessionId)
     if (!s) {
-      s = { hasUserInput: false, lastGoalPhase: undefined, lastCompletedAt: 0 }
+      s = { hasUserInput: false, lastGoalPhase: undefined, lastCompletedAt: -Infinity }
       state.set(sessionId, s)
     }
     return s
@@ -366,6 +367,7 @@ export function createDecider(config, clock = () => Date.now()) {
   return {
     decide(event, session) {
       if (!event || !session?.id) return null
+      if (rootSessionsOnly && session.header?.parentSession) return null // 子代理静默
       const s = sessionState(session.id)
       switch (event.type) {
         case 'turn/start':
@@ -405,7 +407,7 @@ export function createDecider(config, clock = () => Date.now()) {
 - [ ] **Step 4: 运行测试确认通过**
 
 Run: `node --test plugin/test.mjs`
-Expected: 14 个测试全部 PASS。
+Expected: 13 个测试全部 PASS。
 
 - [ ] **Step 5: 提交**
 
@@ -520,7 +522,7 @@ test('dispose kills running child and ignores later pushes', () => {
 - [ ] **Step 2: 运行测试确认失败**
 
 Run: `node --test plugin/test.mjs`
-Expected: 新增 6 个测试 FAIL（`Cannot find module './scheduler.mjs'`），既有 14 个仍 PASS。
+Expected: 新增 6 个测试 FAIL（`Cannot find module './scheduler.mjs'`），既有 13 个仍 PASS。
 
 - [ ] **Step 3: 实现 scheduler.mjs**
 
@@ -608,7 +610,7 @@ export function createScheduler(options, spawnFn = spawn) {
 - [ ] **Step 4: 运行测试确认全部通过**
 
 Run: `node --test plugin/test.mjs`
-Expected: 20 个测试全部 PASS。
+Expected: 19 个测试全部 PASS。
 
 - [ ] **Step 5: 提交**
 
@@ -658,8 +660,7 @@ export function apply(ctx, config = {}) {
 
   ctx.on('session/event', (session, event) => {
     try {
-      if (config.rootSessionsOnly !== false && session.header?.parentSession) return
-      const notice = decider.decide(event, session)
+      const notice = decider.decide(event, session) // 子代理过滤/冷却/映射均在 decide 层
       if (notice !== null) scheduler.push(notice)
     } catch (error) {
       ctx.logger?.warn?.(`[turn-notify] listener failed: ${String(error)}`)
