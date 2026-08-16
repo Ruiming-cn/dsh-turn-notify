@@ -103,7 +103,7 @@ export function createDecider(config, clock = () => Date.now()) {
 
   function compose(kind, data, session, s) {
     const [title, body] = MESSAGES[kind](data)
-    const tag = showSessionTag && session?.id ? `会话 ${String(session.id).slice(-6)} · ` : ''
+    const tag = showSessionTag && session?.id ? `会话 ${String(session.id).slice(-6)}\n` : ''
     const preview = s ? buildPreview(s, kind) : ''
     return {
       kind,

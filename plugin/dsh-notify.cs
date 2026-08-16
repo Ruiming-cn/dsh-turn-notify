@@ -78,6 +78,7 @@ class DshNotify
 
     static void PlayChime()
     {
+        System.Threading.Thread.Sleep(1200); // let the toast banner appear first
         foreach (string candidate in CHIME_CANDIDATES)
         {
             if (System.IO.File.Exists(candidate))
