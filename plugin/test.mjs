@@ -78,6 +78,15 @@ test('goal phase transitions notify once', () => {
   assert.equal(d.decide(ev('goal/change', { operation: 'resume', goal: { phase: 'active' } }), s), null)
 })
 
+test('goal paused transition notifies', () => {
+  const d = createDecider({})
+  const s = session()
+  const pause = d.decide(ev('goal/change', { operation: 'pause', goal: { phase: 'paused' } }), s)
+  assert.equal(pause.kind, 'goal-paused')
+  assert.equal(pause.critical, true)
+  assert.equal(d.decide(ev('goal/change', { operation: 'resume', goal: { phase: 'active' } }), s), null)
+})
+
 test('approval/asked notifies with toolName', () => {
   const d = createDecider({})
   const notice = d.decide(ev('approval/asked', { id: 'ask-1', toolName: 'bash' }), session())
