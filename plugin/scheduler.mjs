@@ -6,6 +6,7 @@ import { spawn } from 'node:child_process'
 export function createScheduler(options, spawnFn = spawn) {
   const { psPath, timeoutMs = 10000, dryRun = false, sound = false, onLog = () => {} } = options
   const queue = []
+  const inflight = new Set() // 所有在途 child（含 critical 直发），dispose 时统一终止
   let running = null
   let disposed = false
 
@@ -22,11 +23,13 @@ export function createScheduler(options, spawnFn = spawn) {
   function run(notice) {
     if (disposed) return null
     const child = spawnFn('powershell.exe', buildArgs(notice), { windowsHide: true })
+    inflight.add(child)
     let settled = false
     const finish = () => {
       if (settled) return
       settled = true
       clearTimeout(timer)
+      inflight.delete(child)
       if (running === child) {
         running = null
         pump()
@@ -69,10 +72,11 @@ export function createScheduler(options, spawnFn = spawn) {
     dispose() {
       disposed = true
       queue.length = 0
-      if (running !== null) {
-        try { running.kill() } catch { /* 已退出 */ }
-        running = null
+      for (const child of inflight) {
+        try { child.kill() } catch { /* 已退出 */ }
       }
+      inflight.clear()
+      running = null
     },
   }
 }

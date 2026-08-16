@@ -215,3 +215,13 @@ test('dispose kills running child and ignores later pushes', () => {
   scheduler.push({ kind: 'blocked', title: 't', body: 'b', critical: true })
   assert.equal(spawned.length, 1) // dispose 后不再新增 spawn（含关键事件）
 })
+
+test('dispose kills inflight critical spawns', () => {
+  const { scheduler, spawned } = harness()
+  scheduler.push({ kind: 'blocked', title: 't', body: 'b', critical: true })
+  scheduler.push({ kind: 'blocked', title: 't', body: 'b', critical: true })
+  assert.equal(spawned.length, 2)
+  scheduler.dispose()
+  assert.equal(spawned[0].child.killed, 1)
+  assert.equal(spawned[1].child.killed, 1)
+})
