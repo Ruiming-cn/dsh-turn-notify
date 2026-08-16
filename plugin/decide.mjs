@@ -17,7 +17,7 @@ export const DEFAULT_CONFIG = {
   cooldownMs: 10000,
   titlePrefix: 'DSH',
   showSessionTag: true,
-  previewChars: 60,
+  previewChars: 15,
 }
 
 export function normalizeConfig(raw = {}) {
