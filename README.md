@@ -75,36 +75,45 @@ dsh-turn-notify/
 - Windows 10/11
 - DSH（DeepSeek Harness），利用其 cordis 补丁机制（`cordis.patch.yml`）
 
-## 接入方式（试点）
+## 接入方式
 
-### 1. 配置补丁
+### 1. 安装插件（拷贝到全局 profile）
 
-在 `~/.dsh/profiles/web/cordis.patch.yml` 末尾追加 insert 条目：
+将插件目录拷贝到 DSH profile：
 
-```yaml
-- insert:
-    id: turn-notify
-    name: "file:///P:/dshTest/dsh-turn-notify/plugin/index.mjs"
-    config:
-      sound: true
-      notify:
-        completed: true
-        blocked: true
-        aborted: true
-        error: true
-        maxTokens: true
-        interrupted: true
-        goals: true
-        approvals: true
-      cooldownMs: 10000
-      previewChars: 15
-      titlePrefix: DSH
-      showSessionTag: true
-      timeoutMs: 10000
-      dryRun: false
+```powershell
+Copy-Item "P:\dshTest\dsh-turn-notify\plugin\*" "C:\Users\20668\.dsh\profiles\web\turn-notify\" -Recurse -Force
 ```
 
-> ⚠️ `name` 必须使用 `file:///` URL（`file:///P:/...`），Node ESM 不接受盘符裸路径（如 `P:/...` 或 `P:\...`）。
+（或直接 `git clone https://github.com/13732070103/dsh-turn-notify` 后拷贝。）
+
+### 2. 配置补丁
+
+在 `~/.dsh/profiles/web/cordis.patch.yml` 的 insert 列表中追加条目：
+
+```yaml
+    - id: turn-notify
+      name: "./turn-notify/index.mjs"
+      config:
+        sound: true
+        notify:
+          completed: true
+          blocked: true
+          aborted: true
+          error: true
+          maxTokens: true
+          interrupted: true
+          goals: true
+          approvals: true
+        cooldownMs: 10000
+        previewChars: 15
+        titlePrefix: DSH
+        showSessionTag: true
+        timeoutMs: 10000
+        dryRun: false
+```
+
+> `name` 使用相对路径（相对 profile 目录解析，如 `./turn-notify/index.mjs`）；若插件在仓库内用绝对路径，需用 `file:///` URL 形式（Node ESM 不接受盘符裸路径）。
 
 ### 2. 重启 GUI
 
@@ -158,6 +167,6 @@ $sysruntime = "C:\Windows\Microsoft.NET\assembly\GAC_MSIL\System.Runtime\v4.0_4.
 
 ## 迁移与发布
 
-- **试点**（当前）：插件留在项目仓库，patch 用绝对路径 `file:///P:/dshTest/dsh-turn-notify/plugin/index.mjs` 引入
-- **迁移**：试点验证完成后，拷贝 `plugin/` 至 `~/.dsh/profiles/web/turn-notify/`，patch 改为相对路径（`./turn-notify/index.mjs`），并删除旧条目，代码零改动
-- **发布**：计划发布至 GitHub（含源码、编译说明与接入文档）
+- **已发布**：https://github.com/13732070103/dsh-turn-notify （MIT License）
+- **已迁移全局**：插件运行于 `~/.dsh/profiles/web/turn-notify/`，patch 使用相对路径 `./turn-notify/index.mjs`
+- **更新插件**：拉取仓库最新代码后，重新拷贝 `plugin/` 至全局目录并重启 GUI；如 `dsh-notify.cs` 有改动需重编译 exe（见「构建 dsh-notify.exe」章节）
