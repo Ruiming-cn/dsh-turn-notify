@@ -107,8 +107,17 @@ export function apply(ctx, config) {
 1. **根会话**：`session.header.parentSession` 不存在；子代理静默
 2. **completed 用户驱动判定**：监听器每次只收到单个事件（无历史），故插件按会话维护 open-turn 标记：`turn/start` 时重置 `hasUserInput=false`；`user/message` 时若 `source.kind === 'user'` 置 `hasUserInput=true`；`turn/end` 时消费该标记。goal 续跑轮次（source.kind==='goal'）与注入上下文（'plugin'）不置位，天然被排除
 3. **goal 转变判定**：按会话维护 `Map<sessionId, lastGoalPhase>`，仅 phase 变化时通知（`create→active`、`resume→active`、`edit`、`clear` 不通知）
-4. **冷却**：`completed` 类 10s 冷却（`cooldownMs`）；`blocked/aborted/error/max-tokens/interrupted/goal-*/approval` 不过冷却
+4. **冷却**：`completed` 类 10s 冷却（`cooldownMs`），**按 sessionId 键控**（会话 A 的完成通知不压制会话 B）；`blocked/aborted/error/max-tokens/interrupted/goal-*/approval` 不过冷却
 5. `approval/asked` 与 GUI 弹窗并存——默认开（用户已确认），可用 `notify.approvals: false` 关闭
+
+## 6.6 多会话隔离（2026-08-14 审查补充）
+
+多会话并发下的事件层天然安全：所有插件状态（open-turn 标记、lastGoalPhase、冷却）均按 `sessionId` 键控，不同会话事件交错到达无共享可变状态。显示层需两条规则：
+
+1. **关键事件不排队**：通知调度改为——`completed` 走串行队列（同时最多 1 个 PS 进程）；`blocked/aborted/error/max-tokens/interrupted/goal-*/approval` 直接并行 spawn，不被其他会话的排队通知阻塞（PS 冷启动 ~1-2s，最多同时 2-3 个进程，可接受）
+2. **会话短标识**：`SessionHeader` 无标题字段，正文首行加 `会话 <id 尾 6 位>`（如 `会话 a1b2c3 · 请查看结果…`），由配置 `showSessionTag: true` 控制（默认开；单会话场景下近乎无感）
+
+其余：同一 AppID 的多条 toast 在通知中心全部显示、互不覆盖（不使用 tag）；迁移期禁止新旧 patch 条目并存（迁移清单注明删除旧条目），插件不做重复挂载自检（YAGNI）。
 
 ## 7. 配置项
 
@@ -123,8 +132,9 @@ config:
     interrupted: true
     goals: true
     approvals: true
-  cooldownMs: 10000        # completed 冷却
+  cooldownMs: 10000        # completed 冷却（按会话）
   titlePrefix: 'DSH'       # 通知标题前缀
+  showSessionTag: true     # 正文首行显示会话 id 尾 6 位（多会话区分）
   sound: false             # 是否播放提示音（默认静默）
   timeoutMs: 10000         # PowerShell 调用超时
   rootSessionsOnly: true
@@ -142,7 +152,7 @@ config:
 ### 8.2 index.mjs 调度健壮性
 
 - `spawn('powershell.exe', args)` 数组传参（无 shell 拼接，无注入面）；`windowsHide: true` 不闪窗
-- 通知**串行队列**（同时最多 1 个 PS 进程）；`timeoutMs` 超时 `child.kill()`
+- 通知调度：`completed` 走**串行队列**（同时最多 1 个 PS 进程）；关键事件（blocked/aborted/error/max-tokens/interrupted/goal-*/approval）**不排队直接 spawn**；`timeoutMs` 超时 `child.kill()`
 - 标题/正文剥除控制字符（含 `\0`，否则 Node spawn 抛错）；decide 全程 try/catch，监听器永不抛
 - 冷却状态为内存 Map（进程重启重置，可接受）；插件 dispose 时清队列与定时器
 - `dryRun: true` 只打日志不 spawn
@@ -157,6 +167,7 @@ config:
 | 试点接入 | patch 指向项目路径插件（绝对路径），重启 GUI | 插件挂载无报错 |
 | 实机场景 | A. 完成：简单任务 → toast；B. 中断：运行中点停止 → toast；C. 出错：断网/错误提示 → toast；D. 批准：approval=ask 触发 `approval/asked` → toast；E. 子代理：跑 subagent 任务 → **无**通知 | 全过 |
 | 冷却验证 | 快速连续发 3 条消息 → 10s 内仅 1 条 completed toast | 符合 |
+| 多会话验证 | 两会话交替完成：A 的 completed 排队时 B 的 blocked 立即弹出（不被阻塞）；两条 toast 正文含各自会话标识 | 符合 |
 
 ## 10. 试点部署形态
 
