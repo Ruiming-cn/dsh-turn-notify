@@ -4,7 +4,7 @@
 import { spawn } from 'node:child_process'
 
 export function createScheduler(options, spawnFn = spawn) {
-  const { psPath, timeoutMs = 10000, dryRun = false, sound = false, onLog = () => {} } = options
+  const { psPath, exePath, timeoutMs = 10000, dryRun = false, sound = false, onLog = () => {} } = options
   const queue = []
   const inflight = new Set() // 所有在途 child（含 critical 直发），dispose 时统一终止
   let running = null
@@ -15,14 +15,18 @@ export function createScheduler(options, spawnFn = spawn) {
   }
 
   function buildArgs(notice) {
-    const args = ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', psPath, '-Title', notice.title, '-Body', notice.body]
-    if (sound) args.push('-Sound')
-    return args
+    // exePath 模式：直接传 -Title/-Body（dsh-notify.exe 自身约定）；
+    // 否则回退 powershell.exe -File notify.ps1。
+    const prefix = exePath
+      ? []
+      : ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', psPath]
+    return [...prefix, '-Title', notice.title, '-Body', notice.body, ...(sound ? ['-Sound'] : [])]
   }
 
   function run(notice) {
     if (disposed) return null
-    const child = spawnFn('powershell.exe', buildArgs(notice), { windowsHide: true })
+    const command = exePath ?? 'powershell.exe'
+    const child = spawnFn(command, buildArgs(notice), { windowsHide: true })
     inflight.add(child)
     let settled = false
     const finish = () => {

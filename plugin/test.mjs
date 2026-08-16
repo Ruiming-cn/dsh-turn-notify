@@ -225,3 +225,37 @@ test('dispose kills inflight critical spawns', () => {
   assert.equal(spawned[0].child.killed, 1)
   assert.equal(spawned[1].child.killed, 1)
 })
+
+test('exePath mode spawns the notifier exe directly', () => {
+  const spawned = []
+  const scheduler = createScheduler({
+    psPath: 'C:/notify.ps1',
+    exePath: 'C:/dsh-notify.exe',
+    onLog: () => {},
+  }, (...args) => {
+    const child = fakeChild()
+    spawned.push({ args, child })
+    return child
+  })
+  scheduler.push({ kind: 'blocked', title: 't', body: 'b', critical: true })
+  assert.equal(spawned[0].args[0], 'C:/dsh-notify.exe')
+  assert.deepEqual(spawned[0].args[1], ['-Title', 't', '-Body', 'b'])
+  spawned[0].child.handlers.close(0)
+})
+
+test('exePath mode keeps -Sound flag when enabled', () => {
+  const spawned = []
+  const scheduler = createScheduler({
+    psPath: 'C:/notify.ps1',
+    exePath: 'C:/dsh-notify.exe',
+    sound: true,
+    onLog: () => {},
+  }, (...args) => {
+    const child = fakeChild()
+    spawned.push({ args, child })
+    return child
+  })
+  scheduler.push({ kind: 'blocked', title: 't', body: 'b', critical: true })
+  assert.deepEqual(spawned[0].args[1], ['-Title', 't', '-Body', 'b', '-Sound'])
+  spawned[0].child.handlers.close(0)
+})
