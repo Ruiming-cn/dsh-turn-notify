@@ -515,7 +515,7 @@ test('dispose kills running child and ignores later pushes', () => {
   scheduler.dispose()
   assert.equal(spawned[0].child.killed, 1)
   scheduler.push({ kind: 'blocked', title: 't', body: 'b', critical: true })
-  assert.equal(spawned.length, 2) // dispose 后不再新增 spawn
+  assert.equal(spawned.length, 1) // dispose 后不再新增 spawn（含关键事件）
 })
 ```
 
