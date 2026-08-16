@@ -20,7 +20,9 @@ export function createScheduler(options, spawnFn = spawn) {
     const prefix = exePath
       ? []
       : ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', psPath]
-    return [...prefix, '-Title', notice.title, '-Body', notice.body, ...(sound ? ['-Sound'] : [])]
+    const args = [...prefix, '-Title', notice.title, '-Body', notice.body, ...(sound ? ['-Sound'] : [])]
+    if (notice.launchUrl) args.push('-Launch', notice.launchUrl)
+    return args
   }
 
   function run(notice) {

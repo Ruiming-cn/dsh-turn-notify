@@ -18,7 +18,22 @@ class DshNotify
     [STAThread]
     static int Main(string[] args)
     {
-        string title = "", body = "";
+        // Activation mode: launched by the toast activation chain (shortcut
+        // target), opens the GUI in the default browser.
+        if (args.Length >= 2 && args[0] == "-Activate")
+        {
+            try
+            {
+                System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo(args[1]) { UseShellExecute = true });
+                return 0;
+            }
+            catch (Exception e)
+            {
+                Console.Error.WriteLine("activate failed: " + e.Message);
+                return 1;
+            }
+        }
+        string title = "", body = "", launch = "";
         bool sound = false;
         for (int i = 0; i < args.Length; i++)
         {
@@ -27,16 +42,17 @@ class DshNotify
                 case "-Title": if (i + 1 < args.Length) title = args[++i]; break;
                 case "-Body": if (i + 1 < args.Length) body = args[++i]; break;
                 case "-Sound": sound = true; break;
+                case "-Launch": if (i + 1 < args.Length) launch = args[++i]; break;
             }
         }
         if (title.Length == 0 || body.Length == 0)
         {
-            Console.Error.WriteLine("usage: dsh-notify.exe -Title <title> -Body <body> [-Sound]");
+            Console.Error.WriteLine("usage: dsh-notify.exe -Title <title> -Body <body> [-Sound] [-Launch <url>]");
             return 2;
         }
         try
         {
-            SendToast(title, body, sound);
+            SendToast(title, body, sound, launch);
             return 0;
         }
         catch (Exception e1)
@@ -61,13 +77,14 @@ class DshNotify
         @"C:\Windows\Media\Windows Notify.wav",
     };
 
-    static void SendToast(string title, string body, bool sound)
+    static void SendToast(string title, string body, bool sound, string launch)
     {
-        string xml = "<toast duration='long'><visual><binding template='ToastText02'>"
+        string launchAttr = launch.Length > 0 ? " launch='" + Escape("-Activate \"" + launch + "\"") + "'" : "";
+        string xml = "<toast duration='long'" + launchAttr + "><visual><binding template='ToastText02'>"
             + "<text id='1' hint-style='title'>" + Escape(title) + "</text>"
             + "<text id='2'>" + Escape(body) + "</text>"
             + "</binding></visual>"
-            + (sound ? "<audio silent='true'/>" : "<audio silent='true'/>")
+            + "<audio silent='true'/>"
             + "</toast>";
         XmlDocument doc = new XmlDocument();
         doc.LoadXml(xml);
