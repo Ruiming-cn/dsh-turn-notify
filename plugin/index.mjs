@@ -11,6 +11,11 @@ import { createScheduler } from './scheduler.mjs'
 
 export const name = 'turn-notify'
 
+// 版本自检：apply 时输出到 GUI 日志，便于确认运行中的插件是否为最新代码
+// （改插件文件不会热重载——Node 模块缓存 + web bundle 的 HMR 为 watch-only，
+//  必须重启 GUI 生效；重启后日志出现本行即新版。）
+const BUILD = '2026-08-17'
+
 export function apply(ctx, config = {}) {
   const dir = fileURLToPath(new URL('.', import.meta.url))
   const psPath = join(dir, 'notify.ps1')
@@ -24,6 +29,7 @@ export function apply(ctx, config = {}) {
     sound: config.sound !== false, // 提示音默认开启（用户 2026-08-16 要求）
     onLog: (level, message) => ctx.logger?.[level]?.(message),
   })
+  ctx.logger?.info?.(`[turn-notify] loaded (build ${BUILD}: questions/planReview/agentError/mergeWindow active)`)
 
   ctx.on('session/event', (session, event) => {
     try {
