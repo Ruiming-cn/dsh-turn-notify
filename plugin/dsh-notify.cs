@@ -18,18 +18,37 @@ class DshNotify
     [STAThread]
     static int Main(string[] args)
     {
-        // Activation mode: launched by the toast activation chain (shortcut
-        // target), opens the GUI in the default browser.
-        if (args.Length >= 2 && args[0] == "-Activate")
+        // Activation mode: launched by the toast activation chain. Windows may
+        // pass the launch string as separate args, as one quoted arg, or as the
+        // bare URL — accept all three shapes.
+        string activateUrl = null;
+        for (int i = 0; i < args.Length; i++)
+        {
+            if (args[i] == "-Activate" && i + 1 < args.Length) { activateUrl = args[i + 1]; break; }
+            if (args[i].StartsWith("-Activate ", StringComparison.Ordinal))
+            {
+                activateUrl = args[i].Substring("-Activate ".Length).Trim('"', ' ');
+                break;
+            }
+            if (args[i].StartsWith("http://", StringComparison.OrdinalIgnoreCase)
+                || args[i].StartsWith("https://", StringComparison.OrdinalIgnoreCase))
+            {
+                activateUrl = args[i].Trim('"', ' ');
+                break;
+            }
+        }
+        if (activateUrl != null)
         {
             try
             {
-                System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo(args[1]) { UseShellExecute = true });
+                System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo(activateUrl) { UseShellExecute = true });
                 return 0;
             }
             catch (Exception e)
             {
-                Console.Error.WriteLine("activate failed: " + e.Message);
+                System.IO.File.AppendAllText(
+                    System.IO.Path.Combine(System.IO.Path.GetTempPath(), "dsh-notify-activate.log"),
+                    DateTime.Now.ToString("s") + " activate failed: " + e.Message + " args=[" + string.Join("|", args) + "]" + Environment.NewLine);
                 return 1;
             }
         }
