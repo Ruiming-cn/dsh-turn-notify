@@ -1,4 +1,4 @@
-﻿param(
+param(
   [Parameter(Mandatory = $true)][string]$Title,
   [Parameter(Mandatory = $true)][string]$Body,
   [switch]$Sound
@@ -23,7 +23,7 @@ function Send-Toast {
   [Windows.UI.Notifications.ToastNotificationManager]::CreateToastNotifier('dsh-turn-notify').Show($toast)
   if ($Sound) {
     Add-Type -AssemblyName System.Media -ErrorAction SilentlyContinue
-    foreach ($wav in @('C:\Windows\Media\chimes.wav', 'C:\Windows\Media\Windows Ding.wav', 'C:\Windows\Media\Windows Notify.wav')) {
+    foreach ($wav in @('C:\Windows\Media\Windows Background.wav', 'C:\Windows\Media\chimes.wav', 'C:\Windows\Media\Windows Ding.wav', 'C:\Windows\Media\Windows Notify.wav')) {
       if (Test-Path $wav) {
         $player = New-Object System.Media.SoundPlayer $wav
         $player.PlaySync()

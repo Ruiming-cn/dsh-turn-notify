@@ -54,8 +54,11 @@ class DshNotify
         }
     }
 
+    // 提示音候选链：Windows Background.wav 优先（用户 2026-08-17 指定），
+    // 缺失时回退系统经典音效；播放前不延迟，与弹窗同步出现。
     static readonly string[] CHIME_CANDIDATES = new string[]
     {
+        @"C:\Windows\Media\Windows Background.wav",
         @"C:\Windows\Media\chimes.wav",
         @"C:\Windows\Media\Windows Ding.wav",
         @"C:\Windows\Media\Windows Notify.wav",
@@ -78,7 +81,8 @@ class DshNotify
 
     static void PlayChime()
     {
-        System.Threading.Thread.Sleep(1200); // let the toast banner appear first
+        // Show() 是异步渲染（~100ms 可见），立即播放声音即与弹窗同步；
+        // 不再 Sleep 等待横幅（旧版 1200ms 延迟会"先见弹窗后闻声"）。
         foreach (string candidate in CHIME_CANDIDATES)
         {
             if (System.IO.File.Exists(candidate))
