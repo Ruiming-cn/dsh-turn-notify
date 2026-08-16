@@ -1,0 +1,19 @@
+# Dependencies
+node_modules/
+
+# Build output
+dist/
+lib/
+
+# Logs
+*.log
+npm-debug.log*
+
+# Test / scratch
+tmp/
+coverage/
+*.tmp
+
+# OS
+.DS_Store
+Thumbs.db
