@@ -1262,6 +1262,178 @@ git add plugin/dsh-notify.cs plugin/dsh-notify.exe plugin/notify.ps1
 git commit -m "feat: enlarge toast body text and localize notifier app name"
 ```
 
+
+---
+
+### Task 9: 鲸鱼图标 + 点击通知跳转对应对话（2026-08-16 用户需求）
+
+**需求**：① toast 应用图标改为 DSH 黑色鲸鱼（`C:\Users\20668\.dsh\dsh-whale.ico`，快捷方式 IconLocation 决定 toast 顶部应用图标）；② 点击 toast 打开**对应对话所在 GUI**（launch 激活链：toast `launch` 属性 → 系统启动快捷方式 Target（dsh-notify.exe）并传参 → `-Activate <url>` 模式用默认浏览器打开 `http://127.0.0.1:<port>/?session=<id>`；多 DSH 实例时各实例 patch 配自己的 `guiUrl` 端口，实现窗口定位）。
+
+**Files:**
+- Modify: `plugin/dsh-notify.cs`（`-Activate <url>` 模式 + `-Launch <url>` 参数 + toast XML `launch` 属性）
+- Modify: `plugin/scheduler.mjs`（buildArgs 追加 `-Launch <url>`）
+- Modify: `plugin/decide.mjs`（`guiUrl` 配置 + notice 增加 `launchUrl`）
+- Modify: `plugin/test.mjs`（decide launchUrl 测试 + scheduler -Launch 测试）
+- 系统侧：快捷方式 `%APPDATA%\Microsoft\Windows\Start Menu\Programs\DSH 通知.lnk` 的 IconLocation 设为 `C:\Users\20668\.dsh\dsh-whale.ico,0`
+
+**Interfaces:**
+- Consumes: 现有 `-Title -Body [-Sound]` 契约；新增 `-Launch <url>`（可选，toast 携带 launch 激活信息）；新增 `-Activate <url>` 激活模式（打开默认浏览器后 exit 0/1）
+- Produces: `notice.launchUrl`（`${guiUrl}/?session=${session.id}`，guiUrl 未配置时缺省）；toast 激活链完整
+
+- [ ] **Step 1: 修改 dsh-notify.cs**
+
+Main 增加激活模式（放在参数解析之前）：
+
+```csharp
+    [STAThread]
+    static int Main(string[] args)
+    {
+        // Activation mode: launched by the toast activation chain (shortcut
+        // target), opens the GUI in the default browser.
+        if (args.Length >= 2 && args[0] == "-Activate")
+        {
+            try
+            {
+                System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo(args[1]) { UseShellExecute = true });
+                return 0;
+            }
+            catch (Exception e)
+            {
+                Console.Error.WriteLine("activate failed: " + e.Message);
+                return 1;
+            }
+        }
+        string title = "", body = "", launch = "";
+        bool sound = false;
+        for (int i = 0; i < args.Length; i++)
+        {
+            switch (args[i])
+            {
+                case "-Title": if (i + 1 < args.Length) title = args[++i]; break;
+                case "-Body": if (i + 1 < args.Length) body = args[++i]; break;
+                case "-Sound": sound = true; break;
+                case "-Launch": if (i + 1 < args.Length) launch = args[++i]; break;
+            }
+        }
+```
+
+SendToast 增加 launch 参数并写入 toast 根元素：
+
+```csharp
+    static void SendToast(string title, string body, bool sound, string launch)
+    {
+        string launchAttr = launch.Length > 0 ? " launch='" + Escape("-Activate \"" + launch + "\"") + "'" : "";
+        string xml = "<toast duration='long'" + launchAttr + "><visual><binding template='ToastText02'>"
+            + "<text id='1' hint-style='title'>" + Escape(title) + "</text>"
+            + "<text id='2'>" + Escape(body) + "</text>"
+            + "</binding></visual>"
+            + "<audio silent='true'/>"
+            + "</toast>";
+        XmlDocument doc = new XmlDocument();
+        doc.LoadXml(xml);
+        ToastNotification toast = new ToastNotification(doc);
+        ToastNotificationManager.CreateToastNotifier("dsh-turn-notify").Show(toast);
+        if (sound) PlayChime();
+    }
+```
+
+Main 中调用处改为 `SendToast(title, body, sound, launch);`。
+
+- [ ] **Step 2: 重编译 exe**（命令同 Task 6 Step 2，csc exit 0）
+
+- [ ] **Step 3: 修改 scheduler.mjs 的 buildArgs**
+
+将：
+
+```js
+    return [...prefix, '-Title', notice.title, '-Body', notice.body, ...(sound ? ['-Sound'] : [])]
+```
+
+改为：
+
+```js
+    const args = [...prefix, '-Title', notice.title, '-Body', notice.body, ...(sound ? ['-Sound'] : [])]
+    if (notice.launchUrl) args.push('-Launch', notice.launchUrl)
+    return args
+```
+
+- [ ] **Step 4: 修改 decide.mjs**
+
+normalizeConfig 增加（`DEFAULT_CONFIG` 与返回值均加）：
+
+```js
+  guiUrl: 'http://127.0.0.1:3080',
+```
+
+```js
+    guiUrl: typeof raw.guiUrl === 'string' ? raw.guiUrl : DEFAULT_CONFIG.guiUrl,
+```
+
+createDecider 解构增加 `guiUrl`；compose 的返回值增加：
+
+```js
+      launchUrl: guiUrl && session?.id ? `${guiUrl}/?session=${session.id}` : undefined,
+```
+
+- [ ] **Step 5: 追加测试（plugin/test.mjs 末尾）**
+
+```js
+test('completed notice carries launchUrl with configured guiUrl', () => {
+  const d = createDecider({ guiUrl: 'http://example.test:4321' })
+  const s = session()
+  d.decide(ev('turn/start', { turn: 1 }), s)
+  d.decide(ev('user/message', { source: { kind: 'user' }, content: [{ type: 'text', text: 'hi' }] }), s)
+  const notice = d.decide(ev('turn/end', { turn: 1, reason: { kind: 'completed' } }), s)
+  assert.equal(notice.launchUrl, 'http://example.test:4321/?session=session-0123456789abcdef')
+})
+
+test('scheduler passes -Launch for notices with launchUrl', () => {
+  const spawned = []
+  const scheduler = createScheduler({
+    psPath: 'C:/notify.ps1',
+    exePath: 'C:/dsh-notify.exe',
+    onLog: () => {},
+  }, (...args) => {
+    const child = fakeChild()
+    spawned.push({ args, child })
+    return child
+  })
+  scheduler.push({ kind: 'blocked', title: 't', body: 'b', critical: true, launchUrl: 'http://x/?session=s1' })
+  assert.deepEqual(spawned[0].args[1], ['-Title', 't', '-Body', 'b', '-Launch', 'http://x/?session=s1'])
+  spawned[0].child.handlers.close(0)
+})
+```
+
+- [ ] **Step 6: 运行测试确认 30/30 pass**
+
+Run: `node --test plugin/test.mjs`（既有 28 + 新增 2 = 30）
+
+- [ ] **Step 7: 快捷方式图标指向鲸鱼**
+
+Run（PowerShell）:
+
+```powershell
+$shell = New-Object -ComObject WScript.Shell
+$lnk = $shell.CreateShortcut("$env:APPDATA\Microsoft\Windows\Start Menu\Programs\DSH 通知.lnk")
+$lnk.TargetPath = "P:\dshTest\dsh-turn-notify\plugin\dsh-notify.exe"
+$lnk.IconLocation = "C:\Users\20668\.dsh\dsh-whale.ico,0"
+$lnk.Save()
+```
+
+注意：WScript.Shell 重存快捷方式会**保留** AppUserModelID 属性吗？——不会（属性丢失）。因此保存后用调度方提供的 C# IPropertyStore helper（`SHGetPropertyStoreFromParsingName` + `PKEY_AppUserModel_ID` = `{9F4C2855-9F79-4B39-A8D0-E1D42DE1D5F3},5`，SetValue vt=31）重写 AUMID `dsh-turn-notify`。若本机已有可用的重写方法（如之前 Task 6/8 用过的方式），直接复用。
+
+- [ ] **Step 8: 冒烟**
+
+Run: `& "P:\dshTest\dsh-turn-notify\plugin\dsh-notify.exe" -Title "DSH · 跳转测试" -Body "点击这条通知应打开浏览器" -Launch "http://127.0.0.1:3080/?session=session-test0001" -Sound`
+Expected: exit 0；toast 顶部图标为鲸鱼（用户确认）；点击 toast 后默认浏览器打开 `http://127.0.0.1:3080/?session=session-test0001`（用户确认）。
+
+- [ ] **Step 9: 提交**
+
+```bash
+git add plugin/dsh-notify.cs plugin/dsh-notify.exe plugin/scheduler.mjs plugin/decide.mjs plugin/test.mjs
+git commit -m "feat: whale icon on toast, click notification opens target session GUI"
+```
+
 ---
 
 ## 后续（不在本计划范围）
@@ -1269,5 +1441,6 @@ git commit -m "feat: enlarge toast body text and localize notifier app name"
 - 迁移全局：拷贝 `plugin/` 至 `~/.dsh/profiles/web/turn-notify/`，patch 改 `name: "./turn-notify/index.mjs"`，删除本计划追加的 file:/// 条目（新旧条目并存会双弹通知）
 - GitHub 发布：补充 LICENSE、CHANGELOG、示例截图；README 补充安装/配置说明
 - 可选增强：`agent/error`（turn 外错误）监听、通知点击跳转 GUI（需注册 AUMID）、声音开关按事件类型细分
+
 
 
