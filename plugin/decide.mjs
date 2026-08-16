@@ -59,7 +59,7 @@ const CRITICAL_KINDS = new Set([
 
 /** kind → [标题, 正文]；正文生成器接收事件 data。 */
 const MESSAGES = {
-  completed: () => ['轮次完成', '请查看结果或下达新指令'],
+  completed: () => ['轮次完成', ''],
   blocked: () => ['目标阻塞', '需要你的指示才能继续'],
   aborted: (data) => {
     const byUser = data?.reason?.reason?.kind === 'user'

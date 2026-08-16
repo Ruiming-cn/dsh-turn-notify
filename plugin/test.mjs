@@ -26,7 +26,7 @@ test('completed with user input notifies', () => {
   assert.equal(notice.kind, 'completed')
   assert.equal(notice.critical, false)
   assert.equal(notice.title, 'DSH · 轮次完成')
-  assert.equal(notice.body, '会话 abcdef\n请查看结果或下达新指令')
+  assert.equal(notice.body, '会话 abcdef')
 })
 
 test('completed without user input is silent', () => {
@@ -120,7 +120,7 @@ test('notify switches disable kinds', () => {
 
 test('showSessionTag false removes tag', () => {
   const d = createDecider({ showSessionTag: false })
-  assert.equal(runTurn(d, session()).body, '请查看结果或下达新指令')
+  assert.equal(runTurn(d, session()).body, '')
 })
 
 test('control characters are stripped from title and body', () => {
@@ -268,7 +268,7 @@ test('completed body includes truncated question and answer preview', () => {
   d.decide(ev('assistant/message', { message: { content: [{ type: 'text', text: '好的，以下是财务分析报告正文，包含三大报表核心指标与趋势图说明……' }] } }), s)
   const notice = d.decide(ev('turn/end', { turn: 1, reason: { kind: 'completed' } }), s)
   // previewChars=20：truncate 取前 19 字符 + '…'（提问第 19 字符是顿号"、"："请帮我写一份财务分析报告，包含现金流、"；回答："好的，以下是财务分析报告正文，包含三大"）
-  assert.match(notice.body, /^会话 abcdef\n问：请帮我写一份财务分析报告，包含现金流、…\n答：好的，以下是财务分析报告正文，包含三大…\n请查看结果或下达新指令$/)
+  assert.match(notice.body, /^会话 abcdef\n问：请帮我写一份财务分析报告，包含现金流、…\n答：好的，以下是财务分析报告正文，包含三大…$/)
   assert.ok(!notice.body.includes('负债率'))
   assert.ok(!notice.body.includes('趋势图说明'))
 })
