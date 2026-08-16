@@ -27,10 +27,29 @@ export function apply(ctx, config = {}) {
 
   ctx.on('session/event', (session, event) => {
     try {
-      const notice = decider.decide(event, session) // 子代理过滤/冷却/映射均在 decide 层
+      const notice = decider.decide(event, session) // 子代理过滤/冷却/防风暴/映射均在 decide 层
       if (notice !== null) scheduler.push(notice)
     } catch (error) {
       ctx.logger?.warn?.(`[turn-notify] listener failed: ${String(error)}`)
+    }
+  }, { global: true })
+
+  // 会话销毁时释放决策器状态，防长跑内存增长
+  ctx.on('session/disposed', (session) => {
+    try {
+      decider.forget(session.id)
+    } catch (error) {
+      ctx.logger?.warn?.(`[turn-notify] cleanup failed: ${String(error)}`)
+    }
+  }, { global: true })
+
+  // 步骤级错误（agent/error 总线，与 session/event 分开）；与 turn/end error 归一防风暴
+  ctx.on('agent/error', (payload) => {
+    try {
+      const notice = decider.decideAgentError(payload)
+      if (notice !== null) scheduler.push(notice)
+    } catch (error) {
+      ctx.logger?.warn?.(`[turn-notify] agent/error listener failed: ${String(error)}`)
     }
   }, { global: true })
 

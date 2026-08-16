@@ -6,14 +6,17 @@ DSH（DeepSeek Harness）轮次完成通知插件：在**轮次完成、目标�
 
 ### 触发时机
 
-监听 DSH 会话事件（`session/event`），在以下时机弹出通知：
+监听 DSH 会话事件（`session/event` 与 `agent/error`），在以下时机弹出通知：
 
 - **轮次完成**（`turn/end: completed`，仅用户直接发起的轮次）
 - **目标阻塞 / 暂停 / 完成**（`goal/change` 状态转变）
 - **对话中断 / 中止**（`turn/end: aborted`，区分用户中止与父代理中止）
 - **轮次出错 / 达到输出上限**（`turn/end: error / max-tokens`）
 - **会话中断（崩溃恢复）**（`turn/end: interrupted`）
-- **等待批准**（`approval/asked`，含工具名）
+- **等待批准**（`approval/asked`，含工具名与原因说明）
+- **等待回答**（`ask_user_question` 工具调用，含问题文本与问题数）——agent 主动向你提问、阻塞等你回答
+- **计划待审阅**（`exit_plan_mode` 工具调用）——计划完成，等你审阅或继续规划
+- **运行出错**（`agent/error` 步骤级错误）——回合中途失败即通知，不等到回合结束
 
 ### 通知样式
 
@@ -27,12 +30,14 @@ DSH（DeepSeek Harness）轮次完成通知插件：在**轮次完成、目标�
 - 延迟 1.2s 与横幅同步出现（先弹横幅、再播声音）
 - **不依赖系统通知音效设置**——即使 Windows 通知音效被设为「无」也照常播放
 
-### 多会话隔离
+### 多会话隔离与防风暴
 
 - 通知状态按会话键控（`session.id`），互不干扰
-- `completed` 通知走串行队列逐个发送；关键事件（阻塞/中断/出错/等待批准）**直发**，不受队列阻塞
+- `completed` 通知走串行队列逐个发送；关键事件（阻塞/中断/出错/等待批准/等待回答/待审阅）**直发**，不受队列阻塞
 - 冷却去抖：同一会话普通完成 10s 限频，关键事件不限
+- **防风暴**：同一会话同一类关键事件 1.5s 内合并为一条（`error` 与 `agent-error`、`blocked` 与 `goal-blocked` 按同类处理，避免同一步错误/同一回合阻塞双弹）；跨会话、跨事件类不受影响
 - 子代理会话静默，只通知根会话
+- 会话状态随 `session/disposed` 释放，并有容量上限（默认 128 会话，最旧淘汰）——长跑无内存增长
 
 ### 通知器
 
@@ -44,8 +49,10 @@ DSH（DeepSeek Harness）轮次完成通知插件：在**轮次完成、目标�
 
 | 配置 | 默认 | 说明 |
 | --- | --- | --- |
-| `notify` | 全开 | 各事件类型的开关（`completed` / `blocked` / `aborted` / `error` / `maxTokens` / `interrupted` / `goals` / `approvals`） |
+| `notify` | 全开 | 各事件类型的开关（`completed` / `blocked` / `aborted` / `error` / `maxTokens` / `interrupted` / `goals` / `approvals` / `questions` / `planReview` / `agentError`） |
 | `cooldownMs` | `10000` | 普通完成通知的冷却时间（毫秒/会话） |
+| `mergeWindowMs` | `1500` | 关键事件防风暴合并窗口（毫秒，同会话同类） |
+| `maxSessions` | `128` | 会话状态容量上限（超限淘汰最旧） |
 | `previewChars` | `15` | 问/答预览截断字数 |
 | `titlePrefix` | `'DSH'` | 通知标题前缀 |
 | `showSessionTag` | `true` | 是否显示会话编号行 |
@@ -138,7 +145,7 @@ Toast 要显示应用图标、且归属于「DSH 通知」而不是「PowerShell
 node --test plugin/test.mjs
 ```
 
-28 个单元测试，覆盖：各事件类型的通知判定、子代理静默、按会话冷却、串行队列与关键事件直发、超时与异常处理、dryRun、exePath 模式、问/答预览截断与清理等。
+45 个单元测试，覆盖：各事件类型的通知判定、等待回答/计划审阅/运行出错、子代理静默、按会话冷却、防风暴合并窗口、串行队列与关键事件直发、超时与异常处理、spawn 同步失败续排、dryRun、exePath 模式、问/答预览截断与清理、码点安全截断、状态清理与容量上限等。
 
 ## 构建 dsh-notify.exe（可选）
 

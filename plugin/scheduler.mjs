@@ -26,7 +26,14 @@ export function createScheduler(options, spawnFn = spawn) {
   function run(notice) {
     if (disposed) return null
     const command = exePath ?? 'powershell.exe'
-    const child = spawnFn(command, buildArgs(notice), { windowsHide: true })
+    let child
+    try {
+      child = spawnFn(command, buildArgs(notice), { windowsHide: true })
+    } catch (error) {
+      // spawn 同步抛错（如路径非法）：记日志并返回 null，由 pump 继续下一个
+      log('warn', `notification spawn failed: ${error.message}`)
+      return null
+    }
     inflight.add(child)
     let settled = false
     const finish = () => {
@@ -40,7 +47,7 @@ export function createScheduler(options, spawnFn = spawn) {
       }
     }
     const timer = setTimeout(() => {
-      log('warn', `notification timed out after ${timeoutMs}ms, killing powershell`)
+      log('warn', `notification timed out after ${timeoutMs}ms, killing notifier (${command})`)
       child.kill()
     }, timeoutMs)
     child.on('error', (error) => {
@@ -55,8 +62,13 @@ export function createScheduler(options, spawnFn = spawn) {
   }
 
   function pump() {
-    if (disposed || running !== null || queue.length === 0) return
-    running = run(queue.shift())
+    if (disposed || running !== null) return
+    while (queue.length > 0) {
+      const child = run(queue.shift())
+      if (child === null) continue // spawn 失败：取下一个，不卡队列
+      running = child
+      return
+    }
   }
 
   return {

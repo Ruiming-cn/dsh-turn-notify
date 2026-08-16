@@ -47,7 +47,7 @@ test('aborted by user vs by parent have different bodies', () => {
   const byUser = runTurn(d, session(), 'user', { kind: 'aborted', reason: { kind: 'user' } })
   assert.equal(byUser.kind, 'aborted')
   assert.match(byUser.body, /你停止了当前轮次/)
-  const byParent = runTurn(d, session(), 'user', { kind: 'aborted', reason: { kind: 'parent' } })
+  const byParent = runTurn(d, session('session-bbbbbbbbbbbb2222'), 'user', { kind: 'aborted', reason: { kind: 'parent' } })
   assert.match(byParent.body, /parent\/hook 取消了轮次/)
 })
 
@@ -314,4 +314,166 @@ test('tool-call blocks are excluded from preview text', () => {
   const notice = d.decide(ev('turn/end', { turn: 1, reason: { kind: 'completed' } }), s)
   assert.match(notice.body, /答：结果文本/)
   assert.ok(!notice.body.includes('bash'))
+})
+
+// ── 2026-08 优化：状态清理 / 码点截断 / approval reason / 等待用户工具 / agent-error / 防风暴 ──
+
+test('forget releases session state including cooldown', () => {
+  const d = createDecider({ cooldownMs: 10000 })
+  const s = session()
+  assert.equal(runTurn(d, s).kind, 'completed')
+  assert.equal(runTurn(d, s), null) // 冷却中
+  d.forget(s.id)
+  assert.equal(runTurn(d, s).kind, 'completed') // 状态已释放
+})
+
+test('session cap evicts oldest session state', () => {
+  const d = createDecider({ maxSessions: 2 })
+  const a = session('session-aaaaaaaaaaaa1111')
+  const b = session('session-bbbbbbbbbbbb2222')
+  const c = session('session-cccccccccccc3333')
+  assert.equal(runTurn(d, a).kind, 'completed')
+  assert.equal(runTurn(d, b).kind, 'completed')
+  assert.equal(runTurn(d, c).kind, 'completed') // 触发淘汰（A 最旧）
+  assert.equal(runTurn(d, a).kind, 'completed') // A 状态已淘汰、冷却清零 → 立即弹
+})
+
+test('truncation is code-point safe for emoji', () => {
+  const d = createDecider({ previewChars: 2 })
+  const s = session()
+  d.decide(ev('turn/start', { turn: 1 }), s)
+  d.decide(ev('user/message', { source: { kind: 'user' }, content: [{ type: 'text', text: '🦈🦈🦈' }] }), s)
+  const notice = d.decide(ev('turn/end', { turn: 1, reason: { kind: 'completed' } }), s)
+  assert.match(notice.body, /问：🦈…/)
+  assert.ok(!/[\uD800-\uDBFF](?![\uDC00-\uDFFF])/.test(notice.body)) // 无孤立高代理
+  assert.ok(!/(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/.test(notice.body)) // 无孤立低代理
+})
+
+test('approval notice includes reason when present', () => {
+  const d = createDecider({})
+  const notice = d.decide(ev('approval/asked', { id: 'ask-1', toolName: 'write', reason: '需要写入目标文件' }), session())
+  assert.match(notice.body, /操作：write/)
+  assert.match(notice.body, /原因：需要写入目标文件/)
+})
+
+test('ask_user_question tool call notifies with question text', () => {
+  const d = createDecider({})
+  const notice = d.decide(ev('tool/call', { name: 'ask_user_question', arguments: '{"questions":[{"id":"q1","question":"继续处理吗？","header":"确认"}]}' }), session())
+  assert.equal(notice.kind, 'question')
+  assert.equal(notice.critical, true)
+  assert.match(notice.body, /继续处理吗？/)
+})
+
+test('ask_user_question with multiple questions counts them', () => {
+  const d = createDecider({})
+  const notice = d.decide(ev('tool/call', { name: 'ask_user_question', arguments: '{"questions":[{"id":"q1","question":"问题一"},{"id":"q2","question":"问题二"}]}' }), session())
+  assert.match(notice.body, /问题一/)
+  assert.match(notice.body, /共 2 个问题/)
+})
+
+test('ask_user_question with invalid arguments is safe', () => {
+  const d = createDecider({})
+  const notice = d.decide(ev('tool/call', { name: 'ask_user_question', arguments: 'not-json{{{' }), session())
+  assert.equal(notice.kind, 'question')
+  assert.match(notice.body, /请查看界面中的提问/)
+})
+
+test('exit_plan_mode tool call notifies plan review', () => {
+  const d = createDecider({})
+  const notice = d.decide(ev('tool/call', { name: 'exit_plan_mode', arguments: '{}' }), session())
+  assert.equal(notice.kind, 'plan-review')
+  assert.equal(notice.critical, true)
+  assert.match(notice.body, /计划已就绪/)
+})
+
+test('notify switches disable question and plan-review', () => {
+  const d = createDecider({ notify: { questions: false, planReview: false } })
+  assert.equal(d.decide(ev('tool/call', { name: 'ask_user_question', arguments: '{"questions":[{"question":"x"}]}' }), session()), null)
+  assert.equal(d.decide(ev('tool/call', { name: 'exit_plan_mode', arguments: '{}' }), session()), null)
+})
+
+test('agent error notifies with message', () => {
+  const d = createDecider({})
+  const s = session()
+  const notice = d.decideAgentError({ agent: { session: s }, turn: 1, step: 2, error: new Error('provider boom') })
+  assert.equal(notice.kind, 'agent-error')
+  assert.equal(notice.critical, true)
+  assert.match(notice.body, /provider boom/)
+})
+
+test('agent error in child session is silent', () => {
+  const d = createDecider({})
+  assert.equal(d.decideAgentError({ agent: { session: subagentSession() }, turn: 1, step: 1, error: new Error('x') }), null)
+})
+
+test('agent error switch disables', () => {
+  const d = createDecider({ notify: { agentError: false } })
+  assert.equal(d.decideAgentError({ agent: { session: session() }, turn: 1, step: 1, error: new Error('x') }), null)
+})
+
+test('merge window coalesces same session same kind', () => {
+  let now = 0
+  const d = createDecider({ mergeWindowMs: 1500 }, () => now)
+  const s = session()
+  const first = d.decide(ev('tool/call', { name: 'ask_user_question', arguments: '{"questions":[{"id":"q1","question":"继续吗？"}]}' }), s)
+  assert.equal(first.kind, 'question')
+  now = 1000
+  assert.equal(d.decide(ev('tool/call', { name: 'ask_user_question', arguments: '{"questions":[{"id":"q2","question":"再来一个？"}]}' }), s), null)
+  // 不同会话不受影响
+  const other = d.decide(ev('tool/call', { name: 'ask_user_question', arguments: '{"questions":[{"id":"q3","question":"B 会话"}]}' }), session('session-bbbbbbbbbbbb2222'))
+  assert.equal(other.kind, 'question')
+})
+
+test('merge window unifies agent-error with turn error', () => {
+  let now = 0
+  const d = createDecider({ mergeWindowMs: 1500 }, () => now)
+  const s = session()
+  const agentErr = d.decideAgentError({ agent: { session: s }, turn: 1, step: 1, error: new Error('boom') })
+  assert.equal(agentErr.kind, 'agent-error')
+  now = 1000
+  d.decide(ev('turn/start', { turn: 1 }), s)
+  assert.equal(d.decide(ev('turn/end', { turn: 1, reason: { kind: 'error', error: { code: 'E', message: 'same boom' } } }), s), null)
+})
+
+test('merge window unifies blocked with goal-blocked', () => {
+  let now = 0
+  const d = createDecider({ mergeWindowMs: 1500 }, () => now)
+  const s = session()
+  d.decide(ev('turn/start', { turn: 1 }), s)
+  const blocked = d.decide(ev('turn/end', { turn: 1, reason: { kind: 'blocked' } }), s)
+  assert.equal(blocked.kind, 'blocked')
+  now = 1000
+  assert.equal(d.decide(ev('goal/change', { operation: 'block', goal: { phase: 'blocked', blockedReason: 'x' } }), s), null)
+})
+
+test('merge window expiry allows the next notice', () => {
+  let now = 0
+  const d = createDecider({ mergeWindowMs: 1500 }, () => now)
+  const s = session()
+  assert.equal(d.decide(ev('tool/call', { name: 'exit_plan_mode', arguments: '{}' }), s).kind, 'plan-review')
+  now = 1501
+  assert.equal(d.decide(ev('tool/call', { name: 'exit_plan_mode', arguments: '{}' }), s).kind, 'plan-review')
+})
+
+test('synchronous spawn failure logs and continues the queue', () => {
+  const logs = []
+  const spawned = []
+  let calls = 0
+  const spawnFn = (...args) => {
+    calls += 1
+    if (calls === 1) throw new Error('bad path')
+    const child = fakeChild()
+    spawned.push({ args, child })
+    return child
+  }
+  const scheduler = createScheduler({
+    psPath: 'C:/notify.ps1',
+    onLog: (level, message) => logs.push({ level, message }),
+  }, spawnFn)
+  scheduler.push({ kind: 'completed', title: 'a', body: 'b', critical: false })
+  scheduler.push({ kind: 'completed', title: 'c', body: 'd', critical: false })
+  assert.ok(logs.some((l) => l.level === 'warn' && /spawn failed/.test(l.message)))
+  assert.equal(spawned.length, 1) // 第一个失败后第二个照常启动
+  assert.ok(spawned[0].args[1].includes('-Title'))
+  spawned[0].child.handlers.close(0)
 })
