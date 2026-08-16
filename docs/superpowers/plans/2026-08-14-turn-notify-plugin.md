@@ -431,6 +431,8 @@ git commit -m "feat: add pure decision logic with per-session state and cooldown
 
 - [ ] **Step 1: 写失败测试（scheduler 部分，追加到 plugin/test.mjs）**
 
+在 `plugin/test.mjs` **末尾**追加以下代码（import 行 + fakeChild/harness 辅助 + 7 个测试；不要改动既有 14 个 decide 测试）：
+
 ```js
 import { createScheduler } from './scheduler.mjs'
 
@@ -517,12 +519,22 @@ test('dispose kills running child and ignores later pushes', () => {
   scheduler.push({ kind: 'blocked', title: 't', body: 'b', critical: true })
   assert.equal(spawned.length, 1) // dispose 后不再新增 spawn（含关键事件）
 })
+
+test('dispose kills inflight critical spawns', () => {
+  const { scheduler, spawned } = harness()
+  scheduler.push({ kind: 'blocked', title: 't', body: 'b', critical: true })
+  scheduler.push({ kind: 'blocked', title: 't', body: 'b', critical: true })
+  assert.equal(spawned.length, 2)
+  scheduler.dispose()
+  assert.equal(spawned[0].child.killed, 1)
+  assert.equal(spawned[1].child.killed, 1)
+})
 ```
 
 - [ ] **Step 2: 运行测试确认失败**
 
 Run: `node --test plugin/test.mjs`
-Expected: 新增 6 个测试 FAIL（`Cannot find module './scheduler.mjs'`），既有 13 个仍 PASS。
+Expected: 新增 7 个测试 FAIL（`Cannot find module './scheduler.mjs'`），既有 14 个仍 PASS。
 
 - [ ] **Step 3: 实现 scheduler.mjs**
 
@@ -535,6 +547,7 @@ import { spawn } from 'node:child_process'
 export function createScheduler(options, spawnFn = spawn) {
   const { psPath, timeoutMs = 10000, dryRun = false, sound = false, onLog = () => {} } = options
   const queue = []
+  const inflight = new Set() // 所有在途 child（含 critical 直发），dispose 时统一终止
   let running = null
   let disposed = false
 
@@ -551,11 +564,13 @@ export function createScheduler(options, spawnFn = spawn) {
   function run(notice) {
     if (disposed) return null
     const child = spawnFn('powershell.exe', buildArgs(notice), { windowsHide: true })
+    inflight.add(child)
     let settled = false
     const finish = () => {
       if (settled) return
       settled = true
       clearTimeout(timer)
+      inflight.delete(child)
       if (running === child) {
         running = null
         pump()
@@ -598,10 +613,11 @@ export function createScheduler(options, spawnFn = spawn) {
     dispose() {
       disposed = true
       queue.length = 0
-      if (running !== null) {
-        try { running.kill() } catch { /* 已退出 */ }
-        running = null
+      for (const child of inflight) {
+        try { child.kill() } catch { /* 已退出 */ }
       }
+      inflight.clear()
+      running = null
     },
   }
 }
@@ -610,7 +626,7 @@ export function createScheduler(options, spawnFn = spawn) {
 - [ ] **Step 4: 运行测试确认全部通过**
 
 Run: `node --test plugin/test.mjs`
-Expected: 19 个测试全部 PASS。
+Expected: 21 个测试全部 PASS。
 
 - [ ] **Step 5: 提交**
 
