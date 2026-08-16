@@ -284,6 +284,7 @@ export const DEFAULT_CONFIG = {
   cooldownMs: 10000,
   titlePrefix: 'DSH',
   showSessionTag: true,
+  previewChars: 60,
 }
 
 export function normalizeConfig(raw = {}) {
@@ -293,17 +294,28 @@ export function normalizeConfig(raw = {}) {
     titlePrefix: typeof raw.titlePrefix === 'string' && raw.titlePrefix !== '' ? raw.titlePrefix : DEFAULT_CONFIG.titlePrefix,
     showSessionTag: raw.showSessionTag !== false,
     rootSessionsOnly: raw.rootSessionsOnly !== false,
+    previewChars: Number.isFinite(raw.previewChars) ? raw.previewChars : DEFAULT_CONFIG.previewChars,
   }
 }
 
-/** 剥除控制字符（含 NUL），防止破坏 spawn 参数。 */
+/** 剥除控制字符（含 NUL），防止破坏 spawn 参数；保留 \t \n \r（多行预览依赖换行）。 */
 function clean(text) {
-  return String(text).replace(/[\u0000-\u001f\u007f]/g, ' ').trim()
+  return String(text).replace(/[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f]/g, ' ').trim()
 }
 
 function truncate(text, max = TRUNCATE) {
   const t = clean(text)
   return t.length > max ? `${t.slice(0, max - 1)}…` : t
+}
+
+/** 从消息中提取纯文本块（assistant 消息可能含 tool-call 等块）。 */
+function textOf(message) {
+  if (!message?.content || !Array.isArray(message.content)) return ''
+  return message.content
+    .filter((block) => block?.type === 'text' && typeof block.text === 'string')
+    .map((block) => block.text)
+    .join('')
+    .trim()
 }
 
 /** 关键事件 = 非 completed：不排队、不受冷却限制。 */
@@ -330,25 +342,40 @@ const MESSAGES = {
 }
 
 export function createDecider(config, clock = () => Date.now()) {
-  const { notify, cooldownMs, titlePrefix, showSessionTag, rootSessionsOnly } = normalizeConfig(config)
-  const state = new Map() // sessionId -> { hasUserInput, lastGoalPhase, lastCompletedAt }
+  const { notify, cooldownMs, titlePrefix, showSessionTag, rootSessionsOnly, previewChars } = normalizeConfig(config)
+  const state = new Map() // sessionId -> { hasUserInput, lastUserText, lastAssistantText, lastGoalPhase, lastCompletedAt }
 
   function sessionState(sessionId) {
     let s = state.get(sessionId)
     if (!s) {
-      s = { hasUserInput: false, lastGoalPhase: undefined, lastCompletedAt: -Infinity }
+      s = {
+        hasUserInput: false,
+        lastUserText: undefined,
+        lastAssistantText: undefined,
+        lastGoalPhase: undefined,
+        lastCompletedAt: -Infinity,
+      }
       state.set(sessionId, s)
     }
     return s
   }
 
-  function compose(kind, data, session) {
+  /** 问答预览：`问：<截断> / 答：<截断>`（completed 才带答），多行置于正文前。 */
+  function buildPreview(s, kind) {
+    const ask = s.lastUserText ? `问：${truncate(s.lastUserText, previewChars)}` : ''
+    const answer = kind === 'completed' && s.lastAssistantText ? `答：${truncate(s.lastAssistantText, previewChars)}` : ''
+    const parts = [ask, answer].filter(Boolean)
+    return parts.length > 0 ? `${parts.join('\n')}\n` : ''
+  }
+
+  function compose(kind, data, session, s) {
     const [title, body] = MESSAGES[kind](data)
     const tag = showSessionTag && session?.id ? `会话 ${String(session.id).slice(-6)} · ` : ''
+    const preview = s ? buildPreview(s, kind) : ''
     return {
       kind,
       title: clean(`${titlePrefix} · ${title}`),
-      body: clean(`${tag}${body}`),
+      body: clean(`${tag}${preview}${body}`),
       critical: CRITICAL_KINDS.has(kind),
     }
   }
@@ -362,7 +389,7 @@ export function createDecider(config, clock = () => Date.now()) {
       : phase === 'paused' ? 'goal-paused'
         : phase === 'complete' ? 'goal-complete'
           : null
-    return kind ? compose(kind, { change }, session) : null
+    return kind ? compose(kind, { change }, session, s) : null
   }
 
   return {
@@ -373,10 +400,22 @@ export function createDecider(config, clock = () => Date.now()) {
       switch (event.type) {
         case 'turn/start':
           s.hasUserInput = false
+          s.lastUserText = undefined
+          s.lastAssistantText = undefined
           return null
-        case 'user/message':
-          if (event.data?.source?.kind === 'user') s.hasUserInput = true
+        case 'user/message': {
+          const sourceKind = event.data?.source?.kind
+          if (sourceKind === 'user') {
+            s.hasUserInput = true
+            if (s.lastUserText === undefined) s.lastUserText = textOf(event.data) // 取首个提问
+          }
           return null
+        }
+        case 'assistant/message': {
+          const text = textOf(event.data?.message)
+          if (text !== '') s.lastAssistantText = text // 取最后回答
+          return null
+        }
         case 'turn/end': {
           const kind = event.data?.reason?.kind
           if (kind === 'completed') {
@@ -384,19 +423,19 @@ export function createDecider(config, clock = () => Date.now()) {
             const now = clock()
             if (now - s.lastCompletedAt < cooldownMs) return null
             s.lastCompletedAt = now
-            return compose('completed', {}, session)
+            return compose('completed', {}, session, s)
           }
-          if (kind === 'blocked') return notify.blocked ? compose('blocked', {}, session) : null
-          if (kind === 'aborted') return notify.aborted ? compose('aborted', event.data, session) : null
-          if (kind === 'error') return notify.error ? compose('error', event.data, session) : null
-          if (kind === 'max-tokens') return notify.maxTokens ? compose('max-tokens', {}, session) : null
-          if (kind === 'interrupted') return notify.interrupted ? compose('interrupted', {}, session) : null
+          if (kind === 'blocked') return notify.blocked ? compose('blocked', {}, session, s) : null
+          if (kind === 'aborted') return notify.aborted ? compose('aborted', event.data, session, s) : null
+          if (kind === 'error') return notify.error ? compose('error', event.data, session, s) : null
+          if (kind === 'max-tokens') return notify.maxTokens ? compose('max-tokens', {}, session, s) : null
+          if (kind === 'interrupted') return notify.interrupted ? compose('interrupted', {}, session, s) : null
           return null
         }
         case 'goal/change':
           return notify.goals ? goalNotice(event.data, session) : null
         case 'approval/asked':
-          return notify.approvals ? compose('approval', event.data, session) : null
+          return notify.approvals ? compose('approval', event.data, session, s) : null
         default:
           return null
       }
@@ -715,7 +754,7 @@ export function apply(ctx, config = {}) {
     exePath,
     timeoutMs: config.timeoutMs ?? 10000,
     dryRun: config.dryRun === true,
-    sound: config.sound === true,
+    sound: config.sound !== false, // 提示音默认开启（用户 2026-08-16 要求）
     onLog: (level, message) => ctx.logger?.[level]?.(message),
   })
 
@@ -1034,6 +1073,107 @@ $lnk = "$env:APPDATA\Microsoft\Windows\Start Menu\Programs\dsh-turn-notify.lnk"
 ```
 
 Expected: 快捷方式存在且目标为 `P:\dshTest\dsh-turn-notify\plugin\dsh-notify.exe`、AppUserModelID 为 `dsh-turn-notify`（若仍指向 powershell.exe，用调度方提供的 Lnk2.Update 重建——调度方已在本任务前完成，验证即可）。
+
+---
+
+### Task 7: 问答内容预览 + 提示音默认开启（2026-08-16 用户新需求）
+
+**需求**：① 通知带提示音（默认开启，可配置关闭）；② 弹窗正文展示本轮**提问内容**与**回答内容**（各固定字数截断，默认 60 字，可配置）。
+
+**Files:**
+- Modify: `plugin/decide.mjs`（已按本任务要求更新于 Task 2 代码块：`previewChars` 配置、`textOf` 提取、`buildPreview` 组装、user/message 记首个提问、assistant/message 记最后回答、turn/start 重置、compose 带预览）
+- Modify: `plugin/index.mjs`（已按本任务要求更新于 Task 4 代码块：`sound: config.sound !== false` 默认开）
+- Modify: `plugin/test.mjs`（追加预览相关测试，见下）
+
+**Interfaces:**
+- Consumes: `createDecider` 现有接口（`decide(event, session)` → notice）
+- Produces: notice.body 新格式：`会话 <id尾6> · 问：<截断提问>\n答：<截断回答>\n<正文>`（completed 含答；其他 turn/end 类事件含问不含答；goal/approval 事件无预览）；配置 `previewChars`（默认 60）
+
+- [ ] **Step 1: 追加测试（追加到 plugin/test.mjs 末尾）**
+
+```js
+test('completed body includes truncated question and answer preview', () => {
+  const d = createDecider({ previewChars: 20 })
+  const s = session()
+  d.decide(ev('turn/start', { turn: 1 }), s)
+  d.decide(ev('user/message', { source: { kind: 'user' }, content: [{ type: 'text', text: '请帮我写一份财务分析报告，包含现金流、负债率与营收增长趋势' }] }), s)
+  d.decide(ev('assistant/message', { message: { content: [{ type: 'text', text: '好的，以下是财务分析报告正文，包含三大报表核心指标与趋势图说明……' }] } }), s)
+  const notice = d.decide(ev('turn/end', { turn: 1, reason: { kind: 'completed' } }), s)
+  // previewChars=20：truncate 取前 19 字符 + '…'（"请帮我写一份财务分析报告，包含现金流，" 与 "好的，以下是财务分析报告正文，包含三大"）
+  assert.match(notice.body, /^会话 abcdef · 问：请帮我写一份财务分析报告，包含现金流，…\n答：好的，以下是财务分析报告正文，包含三大…\n请查看结果或下达新指令$/)
+  assert.ok(!notice.body.includes('负债率'))
+  assert.ok(!notice.body.includes('趋势图说明'))
+})
+
+test('assistant preview takes the last assistant message', () => {
+  const d = createDecider({ previewChars: 50 })
+  const s = session()
+  d.decide(ev('turn/start', { turn: 1 }), s)
+  d.decide(ev('user/message', { source: { kind: 'user' }, content: [{ type: 'text', text: '问1' }] }), s)
+  d.decide(ev('assistant/message', { message: { content: [{ type: 'text', text: '中间回复' }] } }), s)
+  d.decide(ev('assistant/message', { message: { content: [{ type: 'text', text: '最终回复' }] } }), s)
+  const notice = d.decide(ev('turn/end', { turn: 1, reason: { kind: 'completed' } }), s)
+  assert.match(notice.body, /答：最终回复/)
+  assert.ok(!notice.body.includes('中间回复'))
+})
+
+test('blocked notice includes question but not answer', () => {
+  const d = createDecider({})
+  const s = session()
+  d.decide(ev('turn/start', { turn: 1 }), s)
+  d.decide(ev('user/message', { source: { kind: 'user' }, content: [{ type: 'text', text: '帮我做个决策' }] }), s)
+  d.decide(ev('assistant/message', { message: { content: [{ type: 'text', text: '部分回复' }] } }), s)
+  const notice = d.decide(ev('turn/end', { turn: 1, reason: { kind: 'blocked' } }), s)
+  assert.match(notice.body, /问：帮我做个决策/)
+  assert.ok(!notice.body.includes('答：'))
+})
+
+test('goal-source turns record no question preview', () => {
+  const d = createDecider({})
+  const s = session()
+  d.decide(ev('turn/start', { turn: 1 }), s)
+  d.decide(ev('user/message', { source: { kind: 'goal', goalId: 'g1', revision: 1, round: 1 }, content: [{ type: 'text', text: '目标续跑' }] }), s)
+  const notice = d.decide(ev('turn/end', { turn: 1, reason: { kind: 'completed' } }), s)
+  assert.equal(notice, null) // goal 源不置 hasUserInput
+})
+
+test('tool-call blocks are excluded from preview text', () => {
+  const d = createDecider({})
+  const s = session()
+  d.decide(ev('turn/start', { turn: 1 }), s)
+  d.decide(ev('user/message', { source: { kind: 'user' }, content: [{ type: 'text', text: '只算文本' }] }), s)
+  d.decide(ev('assistant/message', { message: { content: [{ type: 'tool-call', id: 'c1', name: 'bash', arguments: '{}' }, { type: 'text', text: '结果文本' }] } }), s)
+  const notice = d.decide(ev('turn/end', { turn: 1, reason: { kind: 'completed' } }), s)
+  assert.match(notice.body, /答：结果文本/)
+  assert.ok(!notice.body.includes('bash'))
+})
+```
+
+- [ ] **Step 2: 运行测试确认失败**
+
+Run: `node --test plugin/test.mjs`
+Expected: 新增 5 个测试 FAIL（预览字段缺失），既有 23 个仍 PASS。
+
+- [ ] **Step 3: 更新 decide.mjs 与 index.mjs**
+
+按 Task 2 代码块（`previewChars`/`textOf`/`buildPreview`/状态记录/compose 带预览）与 Task 4 代码块（`sound: config.sound !== false`）更新 `plugin/decide.mjs` 与 `plugin/index.mjs`。
+
+- [ ] **Step 4: 运行测试确认全部通过**
+
+Run: `node --test plugin/test.mjs`
+Expected: 28 个测试全部 PASS（14 decide + 9 scheduler + 5 preview）。
+
+- [ ] **Step 5: 提交**
+
+```bash
+git add plugin/decide.mjs plugin/index.mjs plugin/test.mjs
+git commit -m "feat: show question/answer preview in notifications, sound on by default"
+```
+
+- [ ] **Step 6: 冒烟验证（弹窗内容与提示音）**
+
+Run: `& "P:\dshTest\dsh-turn-notify\plugin\dsh-notify.exe" -Title "DSH · 轮次完成" -Body "会话 abcdef · 问：请帮我写一份财务分析报告…`n答：好的，以下是财务分析报告正文…`n请查看结果或下达新指令" -Sound`
+Expected: exit 0；toast 显示多行正文（问/答预览）且带提示音（用户确认）。
 
 ---
 
