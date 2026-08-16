@@ -5,6 +5,10 @@ node_modules/
 dist/
 lib/
 
+# 构建产物：dsh-notify.exe 不入库（源码 dsh-notify.cs 在库，
+# clone 后按 README「构建 dsh-notify.exe」章节编译生成）
+plugin/dsh-notify.exe
+
 # Logs
 *.log
 npm-debug.log*
@@ -17,3 +21,8 @@ coverage/
 # OS
 .DS_Store
 Thumbs.db
+desktop.ini
+
+# IDE
+.idea/
+.vscode/

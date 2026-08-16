@@ -69,7 +69,7 @@ dsh-turn-notify/
 │   ├── decide.mjs           # 决策器：事件→通知映射、过滤、冷却、预览
 │   ├── scheduler.mjs        # 通知调度：串行队列 + 关键事件直发 + 超时
 │   ├── dsh-notify.cs        # 通知器 C# 源码（Toast + 提示音 + 托盘气泡）
-│   ├── dsh-notify.exe       # 编译产物（AUMID dsh-turn-notify）
+│   ├── dsh-notify.exe       # 构建产物（AUMID dsh-turn-notify，不入库，见「构建」章节）
 │   ├── notify.ps1           # PowerShell 回退通知脚本
 │   ├── smoke.ps1            # 手动冒烟脚本
 │   └── test.mjs             # node:test 单元测试
@@ -147,9 +147,9 @@ node --test plugin/test.mjs
 
 45 个单元测试，覆盖：各事件类型的通知判定、等待回答/计划审阅/运行出错、子代理静默、按会话冷却、防风暴合并窗口、串行队列与关键事件直发、超时与异常处理、spawn 同步失败续排、dryRun、exePath 模式、问/答预览截断与清理、码点安全截断、状态清理与容量上限等。
 
-## 构建 dsh-notify.exe（可选）
+## 构建 dsh-notify.exe（clone 后必需）
 
-插件优先使用预编译的 `dsh-notify.exe`（已入库）；如需重新编译（如更新 C# 代码），依赖：
+`dsh-notify.exe` 是构建产物、**不入库**（见 `.gitignore`），clone 仓库后需先编译生成，插件才走 exe 通知路径；缺失时自动回退 `notify.ps1`（但可能被安全软件拦截）。依赖：
 
 - .NET Framework 4.8 的 csc.exe（`C:\Windows\Microsoft.NET\Framework64\v4.0.30319\csc.exe`）
 - Windows SDK 的 `Windows.winmd`（UnionMetadata，本机 10.0.26100.0）
@@ -160,6 +160,8 @@ $winmd = "C:\Program Files (x86)\Windows Kits\10\UnionMetadata\10.0.26100.0\Wind
 $sysruntime = "C:\Windows\Microsoft.NET\assembly\GAC_MSIL\System.Runtime\v4.0_4.0.0.0__b03f5f7f11d50a3a\System.Runtime.dll"
 & "C:\Windows\Microsoft.NET\Framework64\v4.0.30319\csc.exe" /nologo /nostdlib /target:exe /out:"dsh-notify.exe" /r:mscorlib.dll /r:System.dll /r:System.Core.dll /r:"$sysruntime" /r:System.Windows.Forms.dll /r:System.Drawing.dll /r:System.Runtime.WindowsRuntime.dll /r:"$winmd" "dsh-notify.cs"
 ```
+
+在 `plugin/` 目录下执行（`/out` 输出到当前目录），然后把 `plugin/` 整体拷贝到全局 profile。
 
 图标资源：toast 鲸鱼图标来自开始菜单快捷方式「DSH 通知.lnk」的 IconLocation（指向 `dsh-whale.ico`，需随迁移拷贝至目标目录并重建快捷方式：Target=dsh-notify.exe、AppUserModelID=dsh-turn-notify）。
 
@@ -176,5 +178,5 @@ $sysruntime = "C:\Windows\Microsoft.NET\assembly\GAC_MSIL\System.Runtime\v4.0_4.
 
 - **已发布**：https://github.com/Ruiming-cn/dsh-turn-notify （MIT License）
 - **已迁移全局**：插件运行于 `~/.dsh/profiles/web/turn-notify/`，patch 使用相对路径 `./turn-notify/index.mjs`
-- **更新插件**：拉取仓库最新代码后，重新拷贝 `plugin/` 至全局目录并重启 GUI；如 `dsh-notify.cs` 有改动需重编译 exe（见「构建 dsh-notify.exe」章节）
+- **更新插件**：拉取仓库最新代码 → 在 `plugin/` 下编译 `dsh-notify.exe`（见「构建」章节）→ 重新拷贝 `plugin/` 至全局目录并重启 GUI；如 `dsh-notify.cs` 有改动需同步重编译 exe
 
