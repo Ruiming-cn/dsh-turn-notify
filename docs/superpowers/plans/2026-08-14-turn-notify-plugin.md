@@ -758,9 +758,9 @@ node "C:\Users\20668\Documents\Codex\2026-08-13\https-github-com-deepseek-ai-dee
 Expected stdout 依次包含（顺序可能因并行 mount 略有差异，内容必须齐全）：
 
 ```
-[turn-notify] [dry-run] completed: DSH · 轮次完成 — 会话 r-0001 · 请查看结果或下达新指令
-[turn-notify] [dry-run] blocked: DSH · 目标阻塞 — 会话 r-0001 · 需要你的指示才能继续
-[turn-notify] [dry-run] approval: DSH · 等待你批准 — 会话 r-0001 · 操作：bash
+[turn-notify] [dry-run] completed: DSH · 轮次完成 — 会话 s-0001 · 请查看结果或下达新指令
+[turn-notify] [dry-run] blocked: DSH · 目标阻塞 — 会话 s-0001 · 需要你的指示才能继续
+[turn-notify] [dry-run] approval: DSH · 等待你批准 — 会话 s-0001 · 操作：bash
 ```
 
 若进程不自动退出，等待 2s 后 Ctrl+C（不视为失败）。若输出缺失/异常，检查 `node --version`（需 ≥18.13）后重跑。
@@ -849,3 +849,4 @@ git commit -m "docs: document pilot integration steps and verification results"
 - 迁移全局：拷贝 `plugin/` 至 `~/.dsh/profiles/web/turn-notify/`，patch 改 `name: "./turn-notify/index.mjs"`，删除本计划追加的 file:/// 条目（新旧条目并存会双弹通知）
 - GitHub 发布：补充 LICENSE、CHANGELOG、示例截图；README 补充安装/配置说明
 - 可选增强：`agent/error`（turn 外错误）监听、通知点击跳转 GUI（需注册 AUMID）、声音开关按事件类型细分
+
