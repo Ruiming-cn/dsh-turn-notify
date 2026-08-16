@@ -56,11 +56,19 @@ class DshNotify
 
     static void SendToast(string title, string body, bool sound)
     {
-        string xml = "<toast duration='long'><visual><binding template='ToastGeneric'>"
-            + "<text>" + Escape(title) + "</text>"
-            + "<text hint-style='title'>" + Escape(body) + "</text>"
+        string audioSrc = "ms-winsoundevent:Notification.Default";
+        if (sound)
+        {
+            string wavPath = System.IO.Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "notify.wav");
+            audioSrc = System.IO.File.Exists(wavPath)
+                ? new Uri(wavPath).AbsoluteUri
+                : "ms-winsoundevent:Notification.Default";
+        }
+        string xml = "<toast duration='long'><visual><binding template='ToastText02'>"
+            + "<text id='1' hint-style='title'>" + Escape(title) + "</text>"
+            + "<text id='2' hint-style='title'>" + Escape(body) + "</text>"
             + "</binding></visual>"
-            + (sound ? "<audio src='ms-winsoundevent:Notification.Default'/>" : "<audio silent='true'/>")
+            + (sound ? "<audio src='" + audioSrc + "'/>" : "<audio silent='true'/>")
             + "</toast>";
         XmlDocument doc = new XmlDocument();
         doc.LoadXml(xml);

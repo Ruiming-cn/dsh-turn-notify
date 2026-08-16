@@ -11,12 +11,17 @@ function Esc([string]$s) { [System.Security.SecurityElement]::Escape($s) }
 function Send-Toast {
   [void][Windows.UI.Notifications.ToastNotificationManager, Windows.UI.Notifications, ContentType = WindowsRuntime]
   [void][Windows.Data.Xml.Dom.XmlDocument, Windows.Data.Xml.Dom.XmlDocument, ContentType = WindowsRuntime]
-  $xml = "<toast><visual><binding template='ToastGeneric'>"
-  $xml += "<text>$(& Esc $Title)</text>"
-  $xml += "<text hint-style='title'>$(& Esc $Body)</text>"
+  $audioSrc = 'ms-winsoundevent:Notification.Default'
+  if ($Sound) {
+    $wav = Join-Path $PSScriptRoot 'notify.wav'
+    if (Test-Path $wav) { $audioSrc = ([System.Uri]$wav).AbsoluteUri }
+  }
+  $xml = "<toast duration='long'><visual><binding template='ToastText02'>"
+  $xml += "<text id='1' hint-style='title'>$(& Esc $Title)</text>"
+  $xml += "<text id='2' hint-style='title'>$(& Esc $Body)</text>"
   $xml += "</binding></visual>"
   if ($Sound) {
-    $xml += "<audio src='ms-winsoundevent:Notification.Default'/>"
+    $xml += "<audio src='$audioSrc'/>"
   } else {
     $xml += "<audio silent='true'/>"
   }
