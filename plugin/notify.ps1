@@ -13,7 +13,7 @@ function Send-Toast {
   [void][Windows.Data.Xml.Dom.XmlDocument, Windows.Data.Xml.Dom.XmlDocument, ContentType = WindowsRuntime]
   $xml = "<toast><visual><binding template='ToastGeneric'>"
   $xml += "<text>$(& Esc $Title)</text>"
-  $xml += "<text hint-style='subtitle'>$(& Esc $Body)</text>"
+  $xml += "<text hint-style='title'>$(& Esc $Body)</text>"
   $xml += "</binding></visual>"
   if ($Sound) {
     $xml += "<audio src='ms-winsoundevent:Notification.Default'/>"

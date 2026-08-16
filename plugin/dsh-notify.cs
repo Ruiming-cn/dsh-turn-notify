@@ -58,7 +58,7 @@ class DshNotify
     {
         string xml = "<toast duration='long'><visual><binding template='ToastGeneric'>"
             + "<text>" + Escape(title) + "</text>"
-            + "<text hint-style='subtitle'>" + Escape(body) + "</text>"
+            + "<text hint-style='title'>" + Escape(body) + "</text>"
             + "</binding></visual>"
             + (sound ? "<audio src='ms-winsoundevent:Notification.Default'/>" : "<audio silent='true'/>")
             + "</toast>";
