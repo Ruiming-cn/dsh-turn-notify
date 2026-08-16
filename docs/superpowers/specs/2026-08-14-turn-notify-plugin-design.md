@@ -172,3 +172,14 @@ config:
 ## 10. 试点部署形态
 
 插件文件留在项目仓库；`cordis.patch.yml` 用绝对路径 `P:/dshTest/dsh-turn-notify/plugin/index.mjs` 引入。验证通过后迁移：拷贝文件至 `~/.dsh/profiles/web/turn-notify/`、patch 改相对路径，**代码零改动**。
+
+## 11. 实现修订记录（2026-08-16）
+
+与初版设计（上文）的最终差异，按实现演进记录：
+
+1. **通知器改为 dsh-notify.exe（C# 编译产物）**：实机验证发现 powershell.exe 发出的 toast 被安全软件（联想/微软电脑管家）静默拦截（系统通知注册表无记录、`Get-StartApps` 不认 AUMID）。改用 C# 编译的独立 exe（`plugin/dsh-notify.cs` → `dsh-notify.exe`），以 AUMID `dsh-turn-notify`（开始菜单快捷方式注册）直接走 WinRT Toast，绕开安全软件对脚本宿主的拦截；`notify.ps1` 保留为缺失 exe 时的回退
+2. **提示音**：toast 自身恒 `silent='true'`，声音由 `System.Media.SoundPlayer` 直接播放系统 `chimes.wav`（候选链 `chimes.wav` → `Windows Ding.wav` → `Windows Notify.wav`）——不依赖系统通知音效设置（系统通知音效被设为「无」时仍可发声）；播放前 `Sleep(1200)` 等横幅显示，避免"看到 toast 时声音已播完"；PlayChime 内部 try/catch，提示音失败绝不影响 toast（避免触发气泡回退）
+3. **正文三行格式**（横幅高度受限，约 3 行）：`会话 <id 尾 6 位>` 独立一行（`\n` 结尾，非原设计的 `· ` 后缀内联）；问/答预览各按 `previewChars=15` 字截断（原 60，过长挤掉答行）；`completed` 通知正文仅「会话/问/答」三行、**无尾缀提示行**（原「请查看结果或下达新指令」），blocked/error 等关键事件仍保留正文行
+4. **点击跳转已实现后回滚**：Task 9 曾实现 toast `launch` 属性 → `-Activate <url>` → 默认浏览器打开对应会话 GUI（含多形态 argv 兼容与诊断日志），用户实测后**决定放弃**，已按 `8a7014a` 回滚，最终只保留弹窗（鲸鱼图标 + 问答预览）与叮咚提示音
+5. **`previewChars` 默认 15**（问/答各一行 15 字，防长问挤掉答行）
+6. **`sound` 默认开，patch 需显式 `true` 或删行**：初版设计表写 `sound: false`（默认静默），实机发现 patch 配置写死的 `sound: false` 覆盖了默认开启导致无声；现插件默认开启，`cordis.patch.yml` 需显式 `sound: true` 或删除该行

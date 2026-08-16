@@ -1267,6 +1267,8 @@ git commit -m "feat: enlarge toast body text and localize notifier app name"
 
 ### Task 9: 鲸鱼图标 + 点击通知跳转对应对话（2026-08-16 用户需求）
 
+> **状态：跳转功能已按用户决策回滚（8a7014a），最终保留鲸鱼图标与提示音；后续 rounds 4-6 为格式/截断/声音时序迭代。**
+
 **需求**：① toast 应用图标改为 DSH 黑色鲸鱼（`C:\Users\20668\.dsh\dsh-whale.ico`，快捷方式 IconLocation 决定 toast 顶部应用图标）；② 点击 toast 打开**对应对话所在 GUI**（launch 激活链：toast `launch` 属性 → 系统启动快捷方式 Target（dsh-notify.exe）并传参 → `-Activate <url>` 模式用默认浏览器打开 `http://127.0.0.1:<port>/?session=<id>`；多 DSH 实例时各实例 patch 配自己的 `guiUrl` 端口，实现窗口定位）。
 
 **Files:**

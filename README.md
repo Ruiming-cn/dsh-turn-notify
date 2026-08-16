@@ -131,6 +131,22 @@ node --test plugin/test.mjs
 
 28 个单元测试，覆盖：各事件类型的通知判定、子代理静默、按会话冷却、串行队列与关键事件直发、超时与异常处理、dryRun、exePath 模式、问/答预览截断与清理等。
 
+## 构建 dsh-notify.exe（可选）
+
+插件优先使用预编译的 `dsh-notify.exe`（已入库）；如需重新编译（如更新 C# 代码），依赖：
+
+- .NET Framework 4.8 的 csc.exe（`C:\Windows\Microsoft.NET\Framework64\v4.0.30319\csc.exe`）
+- Windows SDK 的 `Windows.winmd`（UnionMetadata，本机 10.0.26100.0）
+- GAC 中的 `System.Runtime.dll` 与 `System.Runtime.WindowsRuntime.dll`
+
+```powershell
+$winmd = "C:\Program Files (x86)\Windows Kits\10\UnionMetadata\10.0.26100.0\Windows.winmd"
+$sysruntime = "C:\Windows\Microsoft.NET\assembly\GAC_MSIL\System.Runtime\v4.0_4.0.0.0__b03f5f7f11d50a3a\System.Runtime.dll"
+& "C:\Windows\Microsoft.NET\Framework64\v4.0.30319\csc.exe" /nologo /nostdlib /target:exe /out:"dsh-notify.exe" /r:mscorlib.dll /r:System.dll /r:System.Core.dll /r:"$sysruntime" /r:System.Windows.Forms.dll /r:System.Drawing.dll /r:System.Runtime.WindowsRuntime.dll /r:"$winmd" "dsh-notify.cs"
+```
+
+图标资源：toast 鲸鱼图标来自开始菜单快捷方式「DSH 通知.lnk」的 IconLocation（指向 `dsh-whale.ico`，需随迁移拷贝至目标目录并重建快捷方式：Target=dsh-notify.exe、AppUserModelID=dsh-turn-notify）。
+
 ## 故障排查
 
 | 现象 | 排查 |

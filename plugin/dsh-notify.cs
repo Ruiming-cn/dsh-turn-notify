@@ -83,9 +83,16 @@ class DshNotify
         {
             if (System.IO.File.Exists(candidate))
             {
-                using (System.Media.SoundPlayer player = new System.Media.SoundPlayer(candidate))
+                try
                 {
-                    player.PlaySync();
+                    using (System.Media.SoundPlayer player = new System.Media.SoundPlayer(candidate))
+                    {
+                        player.PlaySync();
+                    }
+                }
+                catch
+                {
+                    // chime is best-effort; never let it trigger the balloon fallback
                 }
                 return;
             }
