@@ -1,0 +1,78 @@
+// scheduler.mjs — 通知调度：completed 串行队列（10s 冷却由 decide 负责），
+// 关键事件直发不被阻塞；超时 kill；dryRun 只记日志。spawnFn 可注入以便测试。
+
+import { spawn } from 'node:child_process'
+
+export function createScheduler(options, spawnFn = spawn) {
+  const { psPath, timeoutMs = 10000, dryRun = false, sound = false, onLog = () => {} } = options
+  const queue = []
+  let running = null
+  let disposed = false
+
+  function log(level, message) {
+    onLog(level, `[turn-notify] ${message}`)
+  }
+
+  function buildArgs(notice) {
+    const args = ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', psPath, '-Title', notice.title, '-Body', notice.body]
+    if (sound) args.push('-Sound')
+    return args
+  }
+
+  function run(notice) {
+    if (disposed) return null
+    const child = spawnFn('powershell.exe', buildArgs(notice), { windowsHide: true })
+    let settled = false
+    const finish = () => {
+      if (settled) return
+      settled = true
+      clearTimeout(timer)
+      if (running === child) {
+        running = null
+        pump()
+      }
+    }
+    const timer = setTimeout(() => {
+      log('warn', `notification timed out after ${timeoutMs}ms, killing powershell`)
+      child.kill()
+    }, timeoutMs)
+    child.on('error', (error) => {
+      log('warn', `notification spawn failed: ${error.message}`)
+      finish()
+    })
+    child.on('close', (code) => {
+      if (code !== 0) log('warn', `notification exited with code ${code}`)
+      finish()
+    })
+    return child
+  }
+
+  function pump() {
+    if (disposed || running !== null || queue.length === 0) return
+    running = run(queue.shift())
+  }
+
+  return {
+    push(notice) {
+      if (disposed) return
+      if (dryRun) {
+        log('info', `[dry-run] ${notice.kind}: ${notice.title} — ${notice.body}`)
+        return
+      }
+      if (notice.critical) {
+        run(notice) // 直发并行，不占串行槽位
+      } else {
+        queue.push(notice)
+        pump()
+      }
+    },
+    dispose() {
+      disposed = true
+      queue.length = 0
+      if (running !== null) {
+        try { running.kill() } catch { /* 已退出 */ }
+        running = null
+      }
+    },
+  }
+}

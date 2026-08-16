@@ -129,3 +129,89 @@ test('control characters are stripped from title and body', () => {
   assert.ok(!notice.title.includes('\u0000'))
   assert.ok(!notice.body.includes('\u0000'))
 })
+
+import { createScheduler } from './scheduler.mjs'
+
+function fakeChild() {
+  const handlers = {}
+  return {
+    handlers,
+    killed: 0,
+    on(event, cb) { handlers[event] = cb },
+    kill() { this.killed += 1 },
+  }
+}
+
+function harness() {
+  const spawned = []
+  const logs = []
+  const spawnFn = (...args) => {
+    const child = fakeChild()
+    spawned.push({ args, child })
+    return child
+  }
+  const scheduler = createScheduler({
+    psPath: 'C:/notify.ps1',
+    timeoutMs: 20,
+    onLog: (level, message) => logs.push({ level, message }),
+  }, spawnFn)
+  return { scheduler, spawned, logs }
+}
+
+test('completed notices run serially', () => {
+  const { scheduler, spawned } = harness()
+  const n = { kind: 'completed', title: 't', body: 'b', critical: false }
+  scheduler.push(n)
+  scheduler.push(n)
+  assert.equal(spawned.length, 1) // 第二个排队
+  const first = spawned[0]
+  assert.equal(first.args[0], 'powershell.exe')
+  assert.deepEqual(first.args[1].slice(0, 4), ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-File'])
+  assert.ok(first.args[1].includes('-Title'))
+  first.child.handlers.close(0)
+  assert.equal(spawned.length, 2) // 第一个结束后第二个才启动
+})
+
+test('critical notices spawn immediately even while queued work runs', () => {
+  const { scheduler, spawned } = harness()
+  scheduler.push({ kind: 'completed', title: 'a', body: 'b', critical: false })
+  scheduler.push({ kind: 'blocked', title: 'c', body: 'd', critical: true })
+  assert.equal(spawned.length, 2) // completed 运行中，blocked 仍立即直发
+  spawned[0].child.handlers.close(0)
+  assert.equal(spawned.length, 2) // 队列已空，不再 spawn
+})
+
+test('timeout kills the child', async () => {
+  const { scheduler, spawned, logs } = harness()
+  scheduler.push({ kind: 'completed', title: 't', body: 'b', critical: false })
+  await new Promise((resolve) => setTimeout(resolve, 80))
+  assert.equal(spawned[0].child.killed, 1)
+  assert.ok(logs.some((l) => l.level === 'warn' && /timed out/.test(l.message)))
+})
+
+test('spawn error and non-zero exit are logged', () => {
+  const { scheduler, spawned, logs } = harness()
+  scheduler.push({ kind: 'blocked', title: 't', body: 'b', critical: true })
+  spawned[0].child.handlers.error(new Error('boom'))
+  assert.ok(logs.some((l) => l.level === 'warn' && /spawn failed/.test(l.message)))
+  scheduler.push({ kind: 'blocked', title: 't', body: 'b', critical: true })
+  spawned[1].child.handlers.close(3)
+  assert.ok(logs.some((l) => l.level === 'warn' && /code 3/.test(l.message)))
+})
+
+test('dryRun logs without spawning', () => {
+  const logs = []
+  const scheduler = createScheduler({ psPath: 'x', dryRun: true, onLog: (l, m) => logs.push(m) })
+  scheduler.push({ kind: 'completed', title: 't', body: 'b', critical: false })
+  assert.ok(logs.some((m) => m.includes('[dry-run] completed')))
+})
+
+test('dispose kills running child and ignores later pushes', () => {
+  const { scheduler, spawned } = harness()
+  scheduler.push({ kind: 'completed', title: 't', body: 'b', critical: false })
+  scheduler.push({ kind: 'completed', title: 't', body: 'b', critical: false })
+  scheduler.dispose()
+  assert.equal(spawned[0].child.killed, 1)
+  scheduler.push({ kind: 'blocked', title: 't', body: 'b', critical: true })
+  assert.equal(spawned.length, 1) // dispose 后不再新增 spawn（含关键事件）
+})
