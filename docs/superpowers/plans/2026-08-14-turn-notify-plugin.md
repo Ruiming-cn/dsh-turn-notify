@@ -2,16 +2,17 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** 实现一个 DSH 用户级 Cordis 插件：在轮次完成/目标阻塞/对话中断/出错/等待批准等需要用户下达新指令的时刻，通过 PowerShell 发送 Windows 系统通知（WinRT Toast，失败降级托盘气泡）。
+**Goal:** 实现一个 DSH 用户级 Cordis 插件：在轮次完成/目标阻塞/对话中断/出错/等待批准等需要用户下达新指令的时刻，发送 Windows 系统通知（优先 `dsh-notify.exe` 独立通知器的 WinRT Toast，失败降级托盘气泡）。
 
-**Architecture:** 纯 ESM（`.mjs`）插件三模块分层：`decide.mjs`（纯决策逻辑，无 Node/cordis 依赖，可独立单测）→ `scheduler.mjs`（通知调度：completed 串行队列 + 关键事件直发，可注入 fake spawn 单测）→ `index.mjs`（Cordis 入口：`ctx.on('session/event', ..., { global: true })` 监听 + `apply` 返回 disposer）。`notify.ps1` 负责实际弹窗。试点期经 `~/.dsh/profiles/web/cordis.patch.yml` 用 `file:///` URL 引入项目内插件文件，验证后迁移全局时仅改路径。
+**Architecture:** 纯 ESM（`.mjs`）插件三模块分层：`decide.mjs`（纯决策逻辑，无 Node/cordis 依赖，可独立单测）→ `scheduler.mjs`（通知调度：completed 串行队列 + 关键事件直发，可注入 fake spawn 单测）→ `index.mjs`（Cordis 入口：`ctx.on('session/event', ..., { global: true })` 监听 + `apply` 返回 disposer）。通知由 `dsh-notify.exe`（C# 编译的独立可执行文件，AUMID 已注册）发出——powershell.exe 脚本宿主会被安全软件拦截；exe 缺失时回退 `notify.ps1`。试点期经 `~/.dsh/profiles/web/cordis.patch.yml` 用 `file:///` URL 引入项目内插件文件，验证后迁移全局时仅改路径。
 
-**Tech Stack:** Node.js（≥18.13，`node:test` / `node:child_process` / ESM）、Windows PowerShell 5.1（`powershell.exe`）、Windows 10/11 WinRT 通知 API、Cordis 插件协议（`@deepseek-ai/cordis`，仅运行时注入，插件自身零外部依赖）。
+**Tech Stack:** Node.js（≥18.13，`node:test` / `node:child_process` / ESM）、C#（csc + Windows SDK winmd 编译 dsh-notify.exe）、Windows 10/11 WinRT 通知 API、Cordis 插件协议（`@deepseek-ai/cordis`，仅运行时注入，插件自身仅依赖 Node 内置模块）。
 
 ## Global Constraints
 
-- 插件文件全部为纯 ESM（`.mjs`），无构建步骤、无 npm 依赖、不 import 任何 `@deepseek-ai/*` 包（ctx 由 cordis 注入）——保证 src/构建模式、任意目录、未来 GitHub 发布均可用
-- Windows 专属：`spawn('powershell.exe', args)` 数组传参 + `windowsHide: true`；标题/正文先剥除控制字符（含 `\0`）再入参
+- 插件文件全部为纯 ESM（`.mjs`），无构建步骤、无 npm 依赖、不 import 任何 `@deepseek-ai/*` 包（ctx 由 cordis 注入）——保证 src/构建模式、任意目录、未来 GitHub 发布均可用；可 import Node 内置模块（`node:url`/`node:path`/`node:fs`/`node:child_process`）
+- Windows 专属：`spawn(...)` 数组传参 + `windowsHide: true`；标题/正文先剥除控制字符（含 `\0`）再入参
+- **通知器（2026-08-16 实机验证修订）**：优先使用独立可执行文件 `dsh-notify.exe`（C# 编译、AUMID `dsh-turn-notify` 已注册开始菜单快捷方式、WinRT toast `duration='long'`、失败回退托盘气泡）——powershell.exe 脚本宿主会被安全软件（联想/微软电脑管家）拦截导致 toast 静默丢弃，独立 exe 不受影响。`dsh-notify.exe` 缺失时回退 `powershell.exe + notify.ps1`。scheduler 增加 `exePath` 选项；index.mjs 检测同目录 `dsh-notify.exe` 自动优先
 - 事件种类/文案与规格文档一致：`completed | blocked | aborted | error | max-tokens | interrupted | goal-blocked | goal-paused | goal-complete | approval`；标题前缀 `DSH · `；正文会话标识 `会话 <id 尾 6 位> · `
 - 多会话隔离：所有状态按 sessionId 键控；`completed` 走串行队列（10s 冷却/会话），关键事件（非 completed）不排队直发
 - 根会话过滤：`session.header.parentSession` 存在即跳过
@@ -529,6 +530,40 @@ test('dispose kills inflight critical spawns', () => {
   assert.equal(spawned[0].child.killed, 1)
   assert.equal(spawned[1].child.killed, 1)
 })
+
+test('exePath mode spawns the notifier exe directly', () => {
+  const spawned = []
+  const scheduler = createScheduler({
+    psPath: 'C:/notify.ps1',
+    exePath: 'C:/dsh-notify.exe',
+    onLog: () => {},
+  }, (...args) => {
+    const child = fakeChild()
+    spawned.push({ args, child })
+    return child
+  })
+  scheduler.push({ kind: 'blocked', title: 't', body: 'b', critical: true })
+  assert.equal(spawned[0].args[0], 'C:/dsh-notify.exe')
+  assert.deepEqual(spawned[0].args[1], ['-Title', 't', '-Body', 'b'])
+  spawned[0].child.handlers.close(0)
+})
+
+test('exePath mode keeps -Sound flag when enabled', () => {
+  const spawned = []
+  const scheduler = createScheduler({
+    psPath: 'C:/notify.ps1',
+    exePath: 'C:/dsh-notify.exe',
+    sound: true,
+    onLog: () => {},
+  }, (...args) => {
+    const child = fakeChild()
+    spawned.push({ args, child })
+    return child
+  })
+  scheduler.push({ kind: 'blocked', title: 't', body: 'b', critical: true })
+  assert.deepEqual(spawned[0].args[1], ['-Title', 't', '-Body', 'b', '-Sound'])
+  spawned[0].child.handlers.close(0)
+})
 ```
 
 - [ ] **Step 2: 运行测试确认失败**
@@ -545,7 +580,7 @@ Expected: 新增 7 个测试 FAIL（`Cannot find module './scheduler.mjs'`），
 import { spawn } from 'node:child_process'
 
 export function createScheduler(options, spawnFn = spawn) {
-  const { psPath, timeoutMs = 10000, dryRun = false, sound = false, onLog = () => {} } = options
+  const { psPath, exePath, timeoutMs = 10000, dryRun = false, sound = false, onLog = () => {} } = options
   const queue = []
   const inflight = new Set() // 所有在途 child（含 critical 直发），dispose 时统一终止
   let running = null
@@ -556,14 +591,18 @@ export function createScheduler(options, spawnFn = spawn) {
   }
 
   function buildArgs(notice) {
-    const args = ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', psPath, '-Title', notice.title, '-Body', notice.body]
-    if (sound) args.push('-Sound')
-    return args
+    // exePath 模式：直接传 -Title/-Body（dsh-notify.exe 自身约定）；
+    // 否则回退 powershell.exe -File notify.ps1。
+    const prefix = exePath
+      ? []
+      : ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', psPath]
+    return [...prefix, '-Title', notice.title, '-Body', notice.body, ...(sound ? ['-Sound'] : [])]
   }
 
   function run(notice) {
     if (disposed) return null
-    const child = spawnFn('powershell.exe', buildArgs(notice), { windowsHide: true })
+    const command = exePath ?? 'powershell.exe'
+    const child = spawnFn(command, buildArgs(notice), { windowsHide: true })
     inflight.add(child)
     let settled = false
     const finish = () => {
@@ -655,8 +694,11 @@ git commit -m "feat: add notification scheduler with serial queue and critical f
 ```js
 // index.mjs — dsh-turn-notify：Cordis 插件入口。
 // 监听 session/event（global），决策后经 scheduler 发送 Windows 通知。
-// 零外部依赖：ctx 由 cordis 注入；notify.ps1 与插件同目录。
+// 通知器优先 dsh-notify.exe（独立 exe，绕开安全软件对脚本宿主的拦截），
+// 缺失时回退 notify.ps1。仅依赖 Node 内置模块与相对模块。
 
+import { existsSync } from 'node:fs'
+import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { createDecider } from './decide.mjs'
 import { createScheduler } from './scheduler.mjs'
@@ -664,10 +706,13 @@ import { createScheduler } from './scheduler.mjs'
 export const name = 'turn-notify'
 
 export function apply(ctx, config = {}) {
-  const psPath = fileURLToPath(new URL('./notify.ps1', import.meta.url))
+  const dir = fileURLToPath(new URL('.', import.meta.url))
+  const psPath = join(dir, 'notify.ps1')
+  const exePath = existsSync(join(dir, 'dsh-notify.exe')) ? join(dir, 'dsh-notify.exe') : undefined
   const decider = createDecider(config)
   const scheduler = createScheduler({
     psPath,
+    exePath,
     timeoutMs: config.timeoutMs ?? 10000,
     dryRun: config.dryRun === true,
     sound: config.sound === true,
@@ -841,6 +886,154 @@ Expected: GUI 恢复；控制台/日志无 `turn-notify` 相关报错；`plugin(
 git add README.md
 git commit -m "docs: document pilot integration steps and verification results"
 ```
+
+---
+
+### Task 6: dsh-notify.exe 独立通知器集成（2026-08-16 实机验证新增）
+
+**背景**：Task 5 实机验证发现 powershell.exe 发出的 toast 被安全软件（联想/微软电脑管家）静默拦截（系统通知注册表无记录、Get-StartApps 不认 AUMID）。C# 编译的独立 exe 已实测可正常显示 toast。本任务把 exe 集成进插件，并保留 PS 回退。
+
+**Files:**
+- Create: `plugin/dsh-notify.cs`（C# 源码，含完整代码）
+- Create: `plugin/dsh-notify.exe`（编译产物，提交入库，使仓库自包含）
+- Modify: `plugin/scheduler.mjs`（已按本任务要求更新于 Task 3 代码块：`exePath` 选项 + buildArgs 双模式）
+- Modify: `plugin/test.mjs`（追加 2 个 exe 模式测试，代码见 Task 3 测试块）
+- Modify: `plugin/index.mjs`（已按本任务要求更新于 Task 4 代码块：existsSync 检测 exe 优先）
+
+**Interfaces:**
+- Consumes: `createScheduler` 的 `exePath` 选项（Task 3 已更新）
+- Produces: `dsh-notify.exe` 参数契约 `-Title <string> -Body <string> [-Sound]`；退出码 0=成功（toast 或气泡），1=完全失败（stderr 有错误），2=参数错误
+
+- [ ] **Step 1: 写 dsh-notify.cs**
+
+```csharp
+// dsh-notify.exe - standalone Windows notifier for dsh-turn-notify.
+// WinRT toast via AUMID "dsh-turn-notify" (start-menu shortcut registered),
+// falls back to tray balloon, then exits non-zero. No PowerShell involved.
+// Build: csc /nologo /nostdlib /target:exe /out:dsh-notify.exe
+//   /r:mscorlib.dll /r:System.dll /r:System.Core.dll
+//   /r:"<GAC System.Runtime.dll>"
+//   /r:System.Windows.Forms.dll /r:System.Drawing.dll
+//   /r:System.Runtime.WindowsRuntime.dll
+//   /r:"C:\Program Files (x86)\Windows Kits\10\UnionMetadata\10.0.26100.0\Windows.winmd"
+//   dsh-notify.cs
+using System;
+using System.Windows.Forms;
+using Windows.Data.Xml.Dom;
+using Windows.UI.Notifications;
+
+class DshNotify
+{
+    [STAThread]
+    static int Main(string[] args)
+    {
+        string title = "", body = "";
+        bool sound = false;
+        for (int i = 0; i < args.Length; i++)
+        {
+            switch (args[i])
+            {
+                case "-Title": if (i + 1 < args.Length) title = args[++i]; break;
+                case "-Body": if (i + 1 < args.Length) body = args[++i]; break;
+                case "-Sound": sound = true; break;
+            }
+        }
+        if (title.Length == 0 || body.Length == 0)
+        {
+            Console.Error.WriteLine("usage: dsh-notify.exe -Title <title> -Body <body> [-Sound]");
+            return 2;
+        }
+        try
+        {
+            SendToast(title, body, sound);
+            return 0;
+        }
+        catch (Exception e1)
+        {
+            try
+            {
+                SendBalloon(title, body);
+                return 0;
+            }
+            catch (Exception e2)
+            {
+                Console.Error.WriteLine("toast and balloon failed: " + e1.Message + "; " + e2.Message);
+                return 1;
+            }
+        }
+    }
+
+    static void SendToast(string title, string body, bool sound)
+    {
+        string xml = "<toast duration='long'><visual><binding template='ToastGeneric'>"
+            + "<text>" + Escape(title) + "</text>"
+            + "<text>" + Escape(body) + "</text>"
+            + "</binding></visual>"
+            + (sound ? "<audio src='ms-winsoundevent:Notification.Default'/>" : "<audio silent='true'/>")
+            + "</toast>";
+        XmlDocument doc = new XmlDocument();
+        doc.LoadXml(xml);
+        ToastNotification toast = new ToastNotification(doc);
+        ToastNotificationManager.CreateToastNotifier("dsh-turn-notify").Show(toast);
+    }
+
+    static string Escape(string s)
+    {
+        return System.Security.SecurityElement.Escape(s);
+    }
+
+    static void SendBalloon(string title, string body)
+    {
+        NotifyIcon icon = new NotifyIcon();
+        icon.Icon = System.Drawing.SystemIcons.Information;
+        icon.Visible = true;
+        icon.ShowBalloonTip(8000, title, body, ToolTipIcon.Info);
+        System.Threading.Thread.Sleep(8000);
+        icon.Dispose();
+    }
+}
+```
+
+- [ ] **Step 2: 编译 dsh-notify.exe**
+
+Run（PowerShell，workdir 任意；GAC System.Runtime 路径以实际为准）：
+
+```powershell
+$winmd = "C:\Program Files (x86)\Windows Kits\10\UnionMetadata\10.0.26100.0\Windows.winmd"
+$sysruntime = "C:\Windows\Microsoft.NET\assembly\GAC_MSIL\System.Runtime\v4.0_4.0.0.0__b03f5f7f11d50a3a\System.Runtime.dll"
+& "C:\Windows\Microsoft.NET\Framework64\v4.0.30319\csc.exe" /nologo /nostdlib /target:exe /out:"P:\dshTest\dsh-turn-notify\plugin\dsh-notify.exe" /r:mscorlib.dll /r:System.dll /r:System.Core.dll /r:"$sysruntime" /r:System.Windows.Forms.dll /r:System.Drawing.dll /r:System.Runtime.WindowsRuntime.dll /r:"$winmd" "P:\dshTest\dsh-turn-notify\plugin\dsh-notify.cs"
+```
+
+Expected: csc exit 0，`plugin/dsh-notify.exe` 生成（约 5.6KB）。
+
+- [ ] **Step 3: 运行通知器冒烟**
+
+Run: `& "P:\dshTest\dsh-turn-notify\plugin\dsh-notify.exe" -Title "冒烟" -Body "dsh-notify.exe 冒烟测试"`
+Expected: exit 0；toast 在屏幕右下角显示（duration=long，约 20 秒；如安全软件询问请点信任）。exit 非 0 时检查 stderr。
+
+- [ ] **Step 4: 更新 scheduler/test/index 并全量测试**
+
+`plugin/scheduler.mjs`、`plugin/test.mjs`（追加 2 个 exe 测试）、`plugin/index.mjs` 已按本任务要求更新于 Task 3/4 代码块——按 Task 3 Step 3、Task 3 Step 1（新增 2 个测试）、Task 4 Step 1 的最终代码更新对应文件。
+
+Run: `node --test plugin/test.mjs`
+Expected: 23 个测试全部 PASS（14 decide + 9 scheduler）。
+
+- [ ] **Step 5: 提交**
+
+```bash
+git add plugin/dsh-notify.cs plugin/dsh-notify.exe plugin/scheduler.mjs plugin/test.mjs plugin/index.mjs
+git commit -m "feat: integrate dsh-notify.exe notifier with powershell fallback"
+```
+
+- [ ] **Step 6: 确认 AUMID 快捷方式指向 exe**
+
+Run（PowerShell）:
+
+```powershell
+$lnk = "$env:APPDATA\Microsoft\Windows\Start Menu\Programs\dsh-turn-notify.lnk"
+```
+
+Expected: 快捷方式存在且目标为 `P:\dshTest\dsh-turn-notify\plugin\dsh-notify.exe`、AppUserModelID 为 `dsh-turn-notify`（若仍指向 powershell.exe，用调度方提供的 Lnk2.Update 重建——调度方已在本任务前完成，验证即可）。
 
 ---
 
