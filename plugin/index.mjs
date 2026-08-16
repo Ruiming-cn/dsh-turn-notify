@@ -21,7 +21,7 @@ export function apply(ctx, config = {}) {
     exePath,
     timeoutMs: config.timeoutMs ?? 10000,
     dryRun: config.dryRun === true,
-    sound: config.sound === true,
+    sound: config.sound !== false, // 提示音默认开启（用户 2026-08-16 要求）
     onLog: (level, message) => ctx.logger?.[level]?.(message),
   })
 

@@ -17,6 +17,7 @@ export const DEFAULT_CONFIG = {
   cooldownMs: 10000,
   titlePrefix: 'DSH',
   showSessionTag: true,
+  previewChars: 60,
 }
 
 export function normalizeConfig(raw = {}) {
@@ -26,17 +27,28 @@ export function normalizeConfig(raw = {}) {
     titlePrefix: typeof raw.titlePrefix === 'string' && raw.titlePrefix !== '' ? raw.titlePrefix : DEFAULT_CONFIG.titlePrefix,
     showSessionTag: raw.showSessionTag !== false,
     rootSessionsOnly: raw.rootSessionsOnly !== false,
+    previewChars: Number.isFinite(raw.previewChars) ? raw.previewChars : DEFAULT_CONFIG.previewChars,
   }
 }
 
-/** 剥除控制字符（含 NUL），防止破坏 spawn 参数。 */
+/** 剥除控制字符（含 NUL），防止破坏 spawn 参数；保留 \t \n \r（多行预览依赖换行）。 */
 function clean(text) {
-  return String(text).replace(/[\u0000-\u001f\u007f]/g, ' ').trim()
+  return String(text).replace(/[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f]/g, ' ').trim()
 }
 
 function truncate(text, max = TRUNCATE) {
   const t = clean(text)
   return t.length > max ? `${t.slice(0, max - 1)}…` : t
+}
+
+/** 从消息中提取纯文本块（assistant 消息可能含 tool-call 等块）。 */
+function textOf(message) {
+  if (!message?.content || !Array.isArray(message.content)) return ''
+  return message.content
+    .filter((block) => block?.type === 'text' && typeof block.text === 'string')
+    .map((block) => block.text)
+    .join('')
+    .trim()
 }
 
 /** 关键事件 = 非 completed：不排队、不受冷却限制。 */
@@ -63,25 +75,40 @@ const MESSAGES = {
 }
 
 export function createDecider(config, clock = () => Date.now()) {
-  const { notify, cooldownMs, titlePrefix, showSessionTag, rootSessionsOnly } = normalizeConfig(config)
-  const state = new Map() // sessionId -> { hasUserInput, lastGoalPhase, lastCompletedAt }
+  const { notify, cooldownMs, titlePrefix, showSessionTag, rootSessionsOnly, previewChars } = normalizeConfig(config)
+  const state = new Map() // sessionId -> { hasUserInput, lastUserText, lastAssistantText, lastGoalPhase, lastCompletedAt }
 
   function sessionState(sessionId) {
     let s = state.get(sessionId)
     if (!s) {
-      s = { hasUserInput: false, lastGoalPhase: undefined, lastCompletedAt: -Infinity }
+      s = {
+        hasUserInput: false,
+        lastUserText: undefined,
+        lastAssistantText: undefined,
+        lastGoalPhase: undefined,
+        lastCompletedAt: -Infinity,
+      }
       state.set(sessionId, s)
     }
     return s
   }
 
-  function compose(kind, data, session) {
+  /** 问答预览：`问：<截断> / 答：<截断>`（completed 才带答），多行置于正文前。 */
+  function buildPreview(s, kind) {
+    const ask = s.lastUserText ? `问：${truncate(s.lastUserText, previewChars)}` : ''
+    const answer = kind === 'completed' && s.lastAssistantText ? `答：${truncate(s.lastAssistantText, previewChars)}` : ''
+    const parts = [ask, answer].filter(Boolean)
+    return parts.length > 0 ? `${parts.join('\n')}\n` : ''
+  }
+
+  function compose(kind, data, session, s) {
     const [title, body] = MESSAGES[kind](data)
     const tag = showSessionTag && session?.id ? `会话 ${String(session.id).slice(-6)} · ` : ''
+    const preview = s ? buildPreview(s, kind) : ''
     return {
       kind,
       title: clean(`${titlePrefix} · ${title}`),
-      body: clean(`${tag}${body}`),
+      body: clean(`${tag}${preview}${body}`),
       critical: CRITICAL_KINDS.has(kind),
     }
   }
@@ -106,10 +133,22 @@ export function createDecider(config, clock = () => Date.now()) {
       switch (event.type) {
         case 'turn/start':
           s.hasUserInput = false
+          s.lastUserText = undefined
+          s.lastAssistantText = undefined
           return null
-        case 'user/message':
-          if (event.data?.source?.kind === 'user') s.hasUserInput = true
+        case 'user/message': {
+          const sourceKind = event.data?.source?.kind
+          if (sourceKind === 'user') {
+            s.hasUserInput = true
+            if (s.lastUserText === undefined) s.lastUserText = textOf(event.data) // 取首个提问
+          }
           return null
+        }
+        case 'assistant/message': {
+          const text = textOf(event.data?.message)
+          if (text !== '') s.lastAssistantText = text // 取最后回答
+          return null
+        }
         case 'turn/end': {
           const kind = event.data?.reason?.kind
           if (kind === 'completed') {
@@ -117,18 +156,19 @@ export function createDecider(config, clock = () => Date.now()) {
             const now = clock()
             if (now - s.lastCompletedAt < cooldownMs) return null
             s.lastCompletedAt = now
-            return compose('completed', {}, session)
+            return compose('completed', {}, session, s)
           }
-          if (kind === 'blocked') return notify.blocked ? compose('blocked', {}, session) : null
-          if (kind === 'aborted') return notify.aborted ? compose('aborted', event.data, session) : null
-          if (kind === 'error') return notify.error ? compose('error', event.data, session) : null
-          if (kind === 'max-tokens') return notify.maxTokens ? compose('max-tokens', {}, session) : null
-          if (kind === 'interrupted') return notify.interrupted ? compose('interrupted', {}, session) : null
+          if (kind === 'blocked') return notify.blocked ? compose('blocked', {}, session, s) : null
+          if (kind === 'aborted') return notify.aborted ? compose('aborted', event.data, session, s) : null
+          if (kind === 'error') return notify.error ? compose('error', event.data, session, s) : null
+          if (kind === 'max-tokens') return notify.maxTokens ? compose('max-tokens', {}, session, s) : null
+          if (kind === 'interrupted') return notify.interrupted ? compose('interrupted', {}, session, s) : null
           return null
         }
         case 'goal/change':
           return notify.goals ? goalNotice(event.data, session) : null
         case 'approval/asked':
+          // goal/approval 事件不带问答预览（与 brief 契约一致）
           return notify.approvals ? compose('approval', event.data, session) : null
         default:
           return null

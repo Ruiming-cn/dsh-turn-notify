@@ -259,3 +259,59 @@ test('exePath mode keeps -Sound flag when enabled', () => {
   assert.deepEqual(spawned[0].args[1], ['-Title', 't', '-Body', 'b', '-Sound'])
   spawned[0].child.handlers.close(0)
 })
+
+test('completed body includes truncated question and answer preview', () => {
+  const d = createDecider({ previewChars: 20 })
+  const s = session()
+  d.decide(ev('turn/start', { turn: 1 }), s)
+  d.decide(ev('user/message', { source: { kind: 'user' }, content: [{ type: 'text', text: '请帮我写一份财务分析报告，包含现金流、负债率与营收增长趋势' }] }), s)
+  d.decide(ev('assistant/message', { message: { content: [{ type: 'text', text: '好的，以下是财务分析报告正文，包含三大报表核心指标与趋势图说明……' }] } }), s)
+  const notice = d.decide(ev('turn/end', { turn: 1, reason: { kind: 'completed' } }), s)
+  // previewChars=20：truncate 取前 19 字符 + '…'（提问第 19 字符是顿号"、"："请帮我写一份财务分析报告，包含现金流、"；回答："好的，以下是财务分析报告正文，包含三大"）
+  assert.match(notice.body, /^会话 abcdef · 问：请帮我写一份财务分析报告，包含现金流、…\n答：好的，以下是财务分析报告正文，包含三大…\n请查看结果或下达新指令$/)
+  assert.ok(!notice.body.includes('负债率'))
+  assert.ok(!notice.body.includes('趋势图说明'))
+})
+
+test('assistant preview takes the last assistant message', () => {
+  const d = createDecider({ previewChars: 50 })
+  const s = session()
+  d.decide(ev('turn/start', { turn: 1 }), s)
+  d.decide(ev('user/message', { source: { kind: 'user' }, content: [{ type: 'text', text: '问1' }] }), s)
+  d.decide(ev('assistant/message', { message: { content: [{ type: 'text', text: '中间回复' }] } }), s)
+  d.decide(ev('assistant/message', { message: { content: [{ type: 'text', text: '最终回复' }] } }), s)
+  const notice = d.decide(ev('turn/end', { turn: 1, reason: { kind: 'completed' } }), s)
+  assert.match(notice.body, /答：最终回复/)
+  assert.ok(!notice.body.includes('中间回复'))
+})
+
+test('blocked notice includes question but not answer', () => {
+  const d = createDecider({})
+  const s = session()
+  d.decide(ev('turn/start', { turn: 1 }), s)
+  d.decide(ev('user/message', { source: { kind: 'user' }, content: [{ type: 'text', text: '帮我做个决策' }] }), s)
+  d.decide(ev('assistant/message', { message: { content: [{ type: 'text', text: '部分回复' }] } }), s)
+  const notice = d.decide(ev('turn/end', { turn: 1, reason: { kind: 'blocked' } }), s)
+  assert.match(notice.body, /问：帮我做个决策/)
+  assert.ok(!notice.body.includes('答：'))
+})
+
+test('goal-source turns record no question preview', () => {
+  const d = createDecider({})
+  const s = session()
+  d.decide(ev('turn/start', { turn: 1 }), s)
+  d.decide(ev('user/message', { source: { kind: 'goal', goalId: 'g1', revision: 1, round: 1 }, content: [{ type: 'text', text: '目标续跑' }] }), s)
+  const notice = d.decide(ev('turn/end', { turn: 1, reason: { kind: 'completed' } }), s)
+  assert.equal(notice, null) // goal 源不置 hasUserInput
+})
+
+test('tool-call blocks are excluded from preview text', () => {
+  const d = createDecider({})
+  const s = session()
+  d.decide(ev('turn/start', { turn: 1 }), s)
+  d.decide(ev('user/message', { source: { kind: 'user' }, content: [{ type: 'text', text: '只算文本' }] }), s)
+  d.decide(ev('assistant/message', { message: { content: [{ type: 'tool-call', id: 'c1', name: 'bash', arguments: '{}' }, { type: 'text', text: '结果文本' }] } }), s)
+  const notice = d.decide(ev('turn/end', { turn: 1, reason: { kind: 'completed' } }), s)
+  assert.match(notice.body, /答：结果文本/)
+  assert.ok(!notice.body.includes('bash'))
+})
