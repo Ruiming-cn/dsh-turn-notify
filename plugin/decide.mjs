@@ -1,5 +1,6 @@
 // decide.mjs — 纯决策逻辑：事件 → 通知 or null。
 // 无 Node/cordis 依赖，可独立单测。状态按 sessionId 键控（多会话隔离）。
+// 文案双语：`language: 'zh' | 'en'`（默认 zh），标题/正文/问答前缀均按语言输出。
 
 const TRUNCATE = 120
 const QUESTION_CHARS = 60
@@ -24,9 +25,13 @@ export const DEFAULT_CONFIG = {
   titlePrefix: 'DSH',
   showSessionTag: true,
   previewChars: 15,
+  language: 'zh',
 }
 
 export function normalizeConfig(raw = {}) {
+  const language = typeof raw.language === 'string' && raw.language.toLowerCase().startsWith('en')
+    ? 'en'
+    : 'zh'
   return {
     notify: { ...DEFAULT_CONFIG.notify, ...(raw.notify ?? {}) },
     cooldownMs: Number.isFinite(raw.cooldownMs) ? raw.cooldownMs : DEFAULT_CONFIG.cooldownMs,
@@ -36,7 +41,60 @@ export function normalizeConfig(raw = {}) {
     showSessionTag: raw.showSessionTag !== false,
     rootSessionsOnly: raw.rootSessionsOnly !== false,
     previewChars: Number.isFinite(raw.previewChars) ? raw.previewChars : DEFAULT_CONFIG.previewChars,
+    language,
   }
+}
+
+/** 中英文案字典：MESSAGES 按 (data, lang) 取值。 */
+const LANG = {
+  zh: {
+    completed: ['轮次完成', ''],
+    blocked: ['目标阻塞', '需要你的指示才能继续'],
+    abortedByUser: ['对话已中断', '你停止了当前轮次'],
+    abortedOther: ['对话已中止', 'parent/hook 取消了轮次'],
+    error: '轮次出错',
+    maxTokens: ['达到输出上限', '本轮输出被截断'],
+    interrupted: ['会话中断', '崩溃恢复，请检查会话'],
+    goalBlocked: '目标已阻塞',
+    goalPaused: ['目标已暂停', '需要恢复或编辑目标'],
+    goalComplete: ['目标已完成', '请查看结果'],
+    approval: '等待你批准',
+    question: '等待你回答',
+    questionFallback: '请查看界面中的提问',
+    planReview: ['计划待审阅', '计划已就绪，请审阅或继续规划'],
+    agentError: '运行出错',
+    sessionTag: (id) => `会话 ${id}`,
+    askPrefix: '问：',
+    answerPrefix: '答：',
+    count: (n) => `（共 ${n} 个问题）`,
+    operation: (t) => `操作：${t}`,
+    reason: (r) => `原因：${r}`,
+    unknown: '未知',
+  },
+  en: {
+    completed: ['Turn completed', ''],
+    blocked: ['Agent blocked', 'Waiting for your input'],
+    abortedByUser: ['Conversation interrupted', 'You stopped this turn'],
+    abortedOther: ['Conversation aborted', 'Cancelled by parent/hook'],
+    error: 'Turn error',
+    maxTokens: ['Output limit reached', 'Output was truncated'],
+    interrupted: ['Session interrupted', 'Crash recovery — check the session'],
+    goalBlocked: 'Goal blocked',
+    goalPaused: ['Goal paused', 'Resume or edit the goal'],
+    goalComplete: ['Goal completed', 'See the results'],
+    approval: 'Approval needed',
+    question: 'Waiting for your answer',
+    questionFallback: 'See the question in the UI',
+    planReview: ['Plan awaiting review', 'Plan ready — review it or keep planning'],
+    agentError: 'Runtime error',
+    sessionTag: (id) => `Session ${id}`,
+    askPrefix: 'Q: ',
+    answerPrefix: 'A: ',
+    count: (n) => `(${n} questions)`,
+    operation: (t) => `Tool: ${t}`,
+    reason: (r) => `Reason: ${r}`,
+    unknown: 'unknown',
+  },
 }
 
 /** 剥除控制字符（含 NUL），防止破坏 spawn 参数；保留 \t \n \r（多行预览依赖换行）。 */
@@ -63,7 +121,7 @@ function textOf(message) {
 }
 
 /**
- * 从 ask_user_question 的 arguments JSON 中提取首个问题与问题计数。
+ * 从 ask_user_question 的 arguments JSON 中提取首个问题与问题总数。
  * 解析失败/结构异常时安全降级为空（绝不抛错）。
  */
 function firstQuestion(argumentsRaw) {
@@ -73,10 +131,10 @@ function firstQuestion(argumentsRaw) {
     const first = questions.find((q) => typeof q?.question === 'string' && q.question !== '')
     return {
       text: first ? truncate(first.question, QUESTION_CHARS) : '',
-      extra: questions.length > 1 ? `（共 ${questions.length} 个问题）` : '',
+      count: questions.length,
     }
   } catch {
-    return { text: '', extra: '' }
+    return { text: '', count: 0 }
   }
 }
 
@@ -95,32 +153,37 @@ const MERGE_KEYS = {
   'goal-blocked': 'blocked',
 }
 
-/** kind → [标题, 正文]；正文生成器接收事件 data。 */
+/** kind → (data, lang) => [标题, 正文]。 */
 const MESSAGES = {
-  completed: () => ['轮次完成', ''],
-  blocked: () => ['目标阻塞', '需要你的指示才能继续'],
-  aborted: (data) => {
+  completed: (data, lang) => lang.completed,
+  blocked: (data, lang) => lang.blocked,
+  aborted: (data, lang) => {
     const byUser = data?.reason?.reason?.kind === 'user'
-    return byUser ? ['对话已中断', '你停止了当前轮次'] : ['对话已中止', 'parent/hook 取消了轮次']
+    return byUser ? lang.abortedByUser : lang.abortedOther
   },
-  error: (data) => ['轮次出错', `${data?.reason?.error?.code ?? 'UNKNOWN'}: ${truncate(data?.reason?.error?.message ?? '')}`],
-  'max-tokens': () => ['达到输出上限', '本轮输出被截断'],
-  interrupted: () => ['会话中断', '崩溃恢复，请检查会话'],
-  'goal-blocked': (data) => ['目标已阻塞', truncate(data?.change?.goal?.blockedReason ?? '')],
-  'goal-paused': () => ['目标已暂停', '需要恢复或编辑目标'],
-  'goal-complete': () => ['目标已完成', '请查看结果'],
-  approval: (data) => {
-    const base = `操作：${truncate(data?.toolName ?? '未知')}`
+  error: (data, lang) => [`${lang.error}`, `${data?.reason?.error?.code ?? 'UNKNOWN'}: ${truncate(data?.reason?.error?.message ?? '')}`],
+  'max-tokens': (data, lang) => lang.maxTokens,
+  interrupted: (data, lang) => lang.interrupted,
+  'goal-blocked': (data, lang) => [`${lang.goalBlocked}`, truncate(data?.change?.goal?.blockedReason ?? '')],
+  'goal-paused': (data, lang) => lang.goalPaused,
+  'goal-complete': (data, lang) => lang.goalComplete,
+  approval: (data, lang) => {
+    const base = lang.operation(truncate(data?.toolName ?? lang.unknown))
     const reason = data?.reason
-    return ['等待你批准', reason ? `${base}\n原因：${truncate(reason)}` : base]
+    return [lang.approval, reason ? `${base}\n${lang.reason(truncate(reason))}` : base]
   },
-  question: (data) => ['等待你回答', data?.question ? `${data.question}${data.extra ?? ''}` : '请查看界面中的提问'],
-  'plan-review': () => ['计划待审阅', '计划已就绪，请审阅或继续规划'],
-  'agent-error': (data) => ['运行出错', `${data?.error?.code ?? 'UNKNOWN'}: ${truncate(data?.error?.message ?? '')}`],
+  question: (data, lang) => {
+    if (!data?.question) return [lang.question, lang.questionFallback]
+    const countSuffix = data.count > 1 ? ` ${lang.count(data.count)}` : ''
+    return [lang.question, `${data.question}${countSuffix}`]
+  },
+  'plan-review': (data, lang) => lang.planReview,
+  'agent-error': (data, lang) => [`${lang.agentError}`, `${data?.error?.code ?? 'UNKNOWN'}: ${truncate(data?.error?.message ?? '')}`],
 }
 
 export function createDecider(config, clock = () => Date.now()) {
-  const { notify, cooldownMs, mergeWindowMs, maxSessions, titlePrefix, showSessionTag, rootSessionsOnly, previewChars } = normalizeConfig(config)
+  const { notify, cooldownMs, mergeWindowMs, maxSessions, titlePrefix, showSessionTag, rootSessionsOnly, previewChars, language } = normalizeConfig(config)
+  const lang = LANG[language]
   const state = new Map() // sessionId -> { hasUserInput, lastUserText, lastAssistantText, lastGoalPhase, lastCompletedAt, lastMergeKey, lastMergeAt }
 
   function sessionState(sessionId) {
@@ -146,15 +209,15 @@ export function createDecider(config, clock = () => Date.now()) {
 
   /** 问答预览：`问：<截断> / 答：<截断>`（completed 才带答），多行置于正文前。 */
   function buildPreview(s, kind) {
-    const ask = s.lastUserText ? `问：${truncate(s.lastUserText, previewChars)}` : ''
-    const answer = kind === 'completed' && s.lastAssistantText ? `答：${truncate(s.lastAssistantText, previewChars)}` : ''
+    const ask = s.lastUserText ? `${lang.askPrefix}${truncate(s.lastUserText, previewChars)}` : ''
+    const answer = kind === 'completed' && s.lastAssistantText ? `${lang.answerPrefix}${truncate(s.lastAssistantText, previewChars)}` : ''
     const parts = [ask, answer].filter(Boolean)
     return parts.length > 0 ? `${parts.join('\n')}\n` : ''
   }
 
   function compose(kind, data, session, s) {
-    const [title, body] = MESSAGES[kind](data)
-    const tag = showSessionTag && session?.id ? `会话 ${String(session.id).slice(-6)}\n` : ''
+    const [title, body] = MESSAGES[kind](data, lang)
+    const tag = showSessionTag && session?.id ? `${lang.sessionTag(String(session.id).slice(-6))}\n` : ''
     const preview = s ? buildPreview(s, kind) : ''
     return {
       kind,
@@ -214,8 +277,8 @@ export function createDecider(config, clock = () => Date.now()) {
           // 等待用户操作的工具：agent 提问（等待回答）、计划审阅
           const name = event.data?.name
           if (name === 'ask_user_question' && notify.questions) {
-            const { text, extra } = firstQuestion(event.data?.arguments)
-            return mergeGuard('question', s, () => compose('question', { question: text, extra }, session))
+            const { text, count } = firstQuestion(event.data?.arguments)
+            return mergeGuard('question', s, () => compose('question', { question: text, count }, session))
           }
           if (name === 'exit_plan_mode' && notify.planReview) {
             return mergeGuard('plan-review', s, () => compose('plan-review', {}, session))

@@ -477,3 +477,70 @@ test('synchronous spawn failure logs and continues the queue', () => {
   assert.ok(spawned[0].args[1].includes('-Title'))
   spawned[0].child.handlers.close(0)
 })
+
+// ── 双语：language: 'en' 时通知文案输出英文（默认 zh 保持中文）──
+
+test('english completed uses english title, session tag and Q/A prefixes', () => {
+  const d = createDecider({ language: 'en', previewChars: 50 })
+  const s = session()
+  d.decide(ev('turn/start', { turn: 1 }), s)
+  d.decide(ev('user/message', { source: { kind: 'user' }, content: [{ type: 'text', text: 'Write a report' }] }), s)
+  d.decide(ev('assistant/message', { message: { content: [{ type: 'text', text: 'Here is the report' }] } }), s)
+  const completed = d.decide(ev('turn/end', { turn: 1, reason: { kind: 'completed' } }), s)
+  assert.equal(completed.title, 'DSH · Turn completed')
+  assert.match(completed.body, /Session abcdef/)
+  assert.match(completed.body, /Q: Write a report/)
+  assert.match(completed.body, /A: Here is the report/)
+})
+
+test('english aborted distinguishes user vs parent', () => {
+  const d = createDecider({ language: 'en' })
+  const byUser = runTurn(d, session(), 'user', { kind: 'aborted', reason: { kind: 'user' } })
+  assert.match(byUser.body, /You stopped this turn/)
+  const byParent = runTurn(d, session('session-bbbbbbbbbbbb2222'), 'user', { kind: 'aborted', reason: { kind: 'parent' } })
+  assert.match(byParent.body, /Cancelled by parent\/hook/)
+})
+
+test('english critical kinds (blocked/max-tokens/interrupted/goals)', () => {
+  const d = createDecider({ language: 'en' })
+  const s1 = session()
+  assert.match(d.decide(ev('turn/end', { turn: 1, reason: { kind: 'blocked' } }), s1).body, /Waiting for your input/)
+  assert.equal(d.decide(ev('turn/end', { turn: 1, reason: { kind: 'max-tokens' } }), s1).title, 'DSH · Output limit reached')
+  assert.equal(d.decide(ev('turn/end', { turn: 1, reason: { kind: 'interrupted' } }), s1).title, 'DSH · Session interrupted')
+  const s2 = session('session-aaaaaaaaaaaa1111')
+  assert.equal(d.decide(ev('goal/change', { operation: 'block', goal: { phase: 'blocked', blockedReason: 'need info' } }), s2).title, 'DSH · Goal blocked')
+  assert.equal(d.decide(ev('goal/change', { operation: 'pause', goal: { phase: 'paused' } }), s2).title, 'DSH · Goal paused')
+  assert.equal(d.decide(ev('goal/change', { operation: 'complete', goal: { phase: 'complete' } }), s2).title, 'DSH · Goal completed')
+})
+
+test('english approval, question and plan review', () => {
+  const d = createDecider({ language: 'en' })
+  const approval = d.decide(ev('approval/asked', { id: 'a1', toolName: 'write', reason: 'need permission' }), session())
+  assert.equal(approval.title, 'DSH · Approval needed')
+  assert.match(approval.body, /Tool: write/)
+  assert.match(approval.body, /Reason: need permission/)
+  const question = d.decide(ev('tool/call', { name: 'ask_user_question', arguments: '{"questions":[{"id":"q1","question":"Continue?"},{"id":"q2","question":"And?"}]}' }), session())
+  assert.equal(question.title, 'DSH · Waiting for your answer')
+  assert.match(question.body, /Continue\?/)
+  assert.match(question.body, /2 questions/)
+  const plan = d.decide(ev('tool/call', { name: 'exit_plan_mode', arguments: '{}' }), session('session-bbbbbbbbbbbb2222'))
+  assert.equal(plan.title, 'DSH · Plan awaiting review')
+  assert.match(plan.body, /Plan ready/)
+})
+
+test('english error and agent-error', () => {
+  const d = createDecider({ language: 'en' })
+  const s = session()
+  const agentErr = d.decideAgentError({ agent: { session: s }, turn: 1, step: 1, error: new Error('boom') })
+  assert.equal(agentErr.title, 'DSH · Runtime error')
+  assert.match(agentErr.body, /boom/)
+  const s2 = session('session-bbbbbbbbbbbb2222')
+  const err = d.decide(ev('turn/end', { turn: 1, reason: { kind: 'error', error: { code: 'E1', message: 'failed' } } }), s2)
+  assert.equal(err.title, 'DSH · Turn error')
+  assert.match(err.body, /E1: failed/)
+})
+
+test('non-en language defaults to zh', () => {
+  const d = createDecider({ language: 'fr' })
+  assert.equal(runTurn(d, session()).title, 'DSH · 轮次完成')
+})
