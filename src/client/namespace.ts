@@ -35,10 +35,15 @@ export function pickNamespace(namespaces: readonly unknown[] | undefined): strin
 function declaresEveryField(schema: unknown): boolean {
   if (schema === undefined || schema === null) return false
   let text: string
-  try {
-    text = JSON.stringify(schema)
-  } catch {
-    return false
+  if (typeof schema === 'string') {
+    // The describe wire may carry the schema already serialized.
+    text = schema
+  } else {
+    try {
+      text = JSON.stringify(schema)
+    } catch {
+      return false
+    }
   }
-  return SETTING_FIELDS.every((field) => text.includes(`"${field}"`))
+  return SETTING_FIELDS.every((field) => text.includes(field))
 }

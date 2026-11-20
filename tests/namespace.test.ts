@@ -42,3 +42,8 @@ test('a schema that cannot be serialized is skipped, not thrown on', () => {
   assert.equal(pickNamespace([{ ns: 'cyclic', schema: cyclic }]), undefined)
   assert.equal(pickNamespace([{ ns: 'cyclic', schema: cyclic }, ours('turn-notify')]), 'turn-notify')
 })
+
+test('a schema that arrives already serialized is still recognised', () => {
+  const serialized = JSON.stringify(ours('turn-notify').schema)
+  assert.equal(pickNamespace([{ ns: 'turn-notify', schema: serialized }]), 'turn-notify')
+})
