@@ -11,7 +11,8 @@ front of you.
 
 ## What it tells you
 
-Two families of moments, three switches.
+Two families of moments, split into three notification switches plus one for
+sound.
 
 | Switch | Moments | What the toast says |
 | --- | --- | --- |
