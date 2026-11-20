@@ -1,0 +1,6 @@
+{
+  "meta": {
+    "title": "Turn notifications",
+    "description": "Windows toasts when the agent blocks on you — approval, question or plan review — and when a turn you asked for ends, with separate switches for approvals and questions, completed turns, and turns that ended in an error, abort, block or output limit. Windows only. The switches live in Settings and apply to the next notification without a restart."
+  }
+}

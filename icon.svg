@@ -1,0 +1,5 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" width="64" height="64" role="img" aria-label="Turn notifications">
+  <rect x="2" y="2" width="60" height="60" rx="14" fill="#c2410c"/>
+  <path d="M32 12a11 11 0 0 0-11 11v8.2l-3.6 6.1A1.8 1.8 0 0 0 18.9 40h26.2a1.8 1.8 0 0 0 1.5-2.7L43 31.2V23a11 11 0 0 0-11-11z" fill="#ffffff"/>
+  <path d="M27 44a5 5 0 0 0 10 0z" fill="#ffffff"/>
+</svg>
