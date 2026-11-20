@@ -125,11 +125,17 @@ export function apply(ctx: Context, config?: Config): void {
     const settings = (settingsCtx as unknown as { get(name: string): unknown }).get('settings') as
       | SettingsService
       | undefined
-    if (settings === undefined) return
-    settingsCtx.effect(
-      () => settings.configure({ auto: false }, settingsCtx.fiber),
-      'dsh-turn-notify: settings page policy',
-    )
+    const configure = settings?.configure
+    if (settings === undefined || typeof configure !== 'function') return
+    settingsCtx.effect(() => {
+      try {
+        return configure.call(settings, { auto: false }, settingsCtx.fiber)
+      } catch (error) {
+        // A page-policy nicety must never be the reason the plugin fails to load.
+        log('warn', `could not set the settings page policy: ${String(error)}`)
+        return () => {}
+      }
+    }, 'dsh-turn-notify: settings page policy')
   })
 
   log('info', 'ready: Windows toasts for approvals, questions and turn ends')
